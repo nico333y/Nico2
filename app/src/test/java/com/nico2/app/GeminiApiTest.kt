@@ -15,14 +15,13 @@ class GeminiApiTest {
         assertEquals("models/gemini-3.8-live", setup.get("model").asString)
         assertEquals(2, setup.size())
         assertFalse(setup.has("thinkingConfig"))
+        assertFalse(setup.has("generationConfig"))
         assertEquals(
             "AUDIO",
-            setup.getAsJsonObject("generationConfig")
-                .getAsJsonArray("responseModalities")
+            setup.getAsJsonArray("responseModalities")
                 .single()
                 .asString,
         )
-        assertEquals(1, setup.getAsJsonObject("generationConfig").size())
     }
 
     @Test

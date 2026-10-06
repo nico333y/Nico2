@@ -35,9 +35,7 @@ internal fun buildGeminiLiveSetup(modelId: String): JsonObject =
                 "model",
                 if (modelId.startsWith("models/")) modelId else "models/$modelId",
             )
-            add("generationConfig", JsonObject().apply {
-                add("responseModalities", com.google.gson.JsonArray().apply { add("AUDIO") })
-            })
+            add("responseModalities", com.google.gson.JsonArray().apply { add("AUDIO") })
         })
     }
 
