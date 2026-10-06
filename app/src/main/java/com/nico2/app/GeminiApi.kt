@@ -89,7 +89,11 @@ class GeminiApiClient internal constructor(
             val payload = JsonParser.parseString(response).asJsonObject
             payload.getAsJsonArray("models")?.forEach { entry ->
                 val model = entry.asJsonObject.toGeminiModel()
-                if (model.supportsText || model.supportsLive) models += model
+                if (model.id in SUPPORTED_MODEL_IDS &&
+                    (model.supportsText || model.supportsLive)
+                ) {
+                    models += model
+                }
             }
             pageToken = payload.get("nextPageToken")
                 ?.takeUnless { it.isJsonNull }
@@ -228,7 +232,7 @@ class GeminiApiClient internal constructor(
             id = id,
             displayName = get("displayName")?.asString?.ifBlank { null } ?: id,
             supportsText = "generateContent" in methods,
-            supportsLive = "BidiGenerateContent" in methods,
+            supportsLive = id == LIVE_MODEL_ID || "BidiGenerateContent" in methods,
         )
     }
 
@@ -236,6 +240,15 @@ class GeminiApiClient internal constructor(
         private const val MAX_CONTEXT_TURNS = 16
         private const val MAX_MODEL_PAGES = 20
         private const val HTTP_TOO_MANY_REQUESTS = 429
+        private const val LIVE_MODEL_ID = "gemini-3.8-live"
+        private val SUPPORTED_MODEL_IDS = setOf(
+            "gemini-3.8-flash",
+            "gemini-3.7-flash",
+            "gemini-2.6-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-flash-lite",
+            LIVE_MODEL_ID,
+        )
 
         internal fun textFallbackOrder(
             selectedModelId: String,

@@ -8,7 +8,7 @@ import org.junit.Test
 
 class GeminiApiTest {
     @Test
-    fun listsOnlyModelsWithTextOrLiveGenerationSupport() = runBlocking {
+    fun listsOnlyRequestedModelsAndRecognizesLiveModel() = runBlocking {
         val transport = FakeTransport(
             GeminiHttpResponse(
                 200,
@@ -23,7 +23,32 @@ class GeminiApiTest {
                     {
                       "name": "models/gemini-3.8-live",
                       "displayName": "Gemini 3.8 Live",
-                      "supportedGenerationMethods": ["BidiGenerateContent"]
+                      "supportedGenerationMethods": ["generateContent"]
+                    },
+                    {
+                      "name": "models/gemini-3.7-flash",
+                      "displayName": "Gemini 3.7 Flash",
+                      "supportedGenerationMethods": ["generateContent"]
+                    },
+                    {
+                      "name": "models/gemini-2.6-flash",
+                      "displayName": "Gemini 2.6 Flash",
+                      "supportedGenerationMethods": ["generateContent"]
+                    },
+                    {
+                      "name": "models/gemini-3.5-flash-lite",
+                      "displayName": "Gemini 3.5 Flash Lite",
+                      "supportedGenerationMethods": ["generateContent"]
+                    },
+                    {
+                      "name": "models/gemini-3.1-flash-lite",
+                      "displayName": "Gemini 3.1 Flash Lite",
+                      "supportedGenerationMethods": ["generateContent"]
+                    },
+                    {
+                      "name": "models/gemini-2.5-pro",
+                      "displayName": "Gemini 2.5 Pro",
+                      "supportedGenerationMethods": ["generateContent"]
                     },
                     {
                       "name": "models/embedding-model",
@@ -37,9 +62,20 @@ class GeminiApiTest {
 
         val models = GeminiApiClient(transport).listModels("private-key")
 
-        assertEquals(listOf("gemini-3.8-flash", "gemini-3.8-live"), models.map { it.id }.sorted())
-        assertTrue(models.single { it.supportsLive }.supportsLive)
-        assertTrue(models.single { it.supportsText }.supportsText)
+        assertEquals(
+            listOf(
+                "gemini-2.6-flash",
+                "gemini-3.1-flash-lite",
+                "gemini-3.5-flash-lite",
+                "gemini-3.7-flash",
+                "gemini-3.8-flash",
+                "gemini-3.8-live",
+            ),
+            models.map { it.id }.sorted(),
+        )
+        assertTrue(models.single { it.id == "gemini-3.8-live" }.supportsLive)
+        assertTrue(models.single { it.id == "gemini-3.8-live" }.supportsText)
+        assertTrue(models.filter { it.id != "gemini-3.8-live" }.all { it.supportsText })
     }
 
     @Test

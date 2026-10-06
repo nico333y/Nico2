@@ -227,13 +227,15 @@ class GeminiLiveSession(
                 connectToNextModel()
             } else {
                 stopAudio()
-                fail(
-                    if (response?.code == HTTP_UNAUTHORIZED || response?.code == HTTP_FORBIDDEN) {
+                val message = when (response?.code) {
+                    HTTP_UNAUTHORIZED, HTTP_FORBIDDEN ->
                         "کلید API رد شد؛ کلید ذخیره‌شده را بررسی کنید."
-                    } else {
-                        "اتصال Gemini Live برقرار نشد."
-                    },
-                )
+                    HTTP_TOO_MANY_REQUESTS ->
+                        "سهمیهٔ Gemini Live برای این کلید تمام شده است."
+                    null -> "اتصال Gemini Live برقرار نشد؛ شبکه را بررسی کنید."
+                    else -> "Gemini Live مدل ${model.id} را نپذیرفت (HTTP ${response.code})."
+                }
+                fail(message)
             }
         }
 
