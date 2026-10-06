@@ -2,11 +2,41 @@ package com.nico2.app
 
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GeminiApiTest {
+    @Test
+    fun liveSetupUsesLiveApiResponseModalitiesShape() {
+        val setup = buildGeminiLiveSetup(
+            modelId = "gemini-3.8-live",
+            preferences = UserPreferences(audioVoice = "voice_two", audioLanguage = "english"),
+        ).getAsJsonObject("setup")
+
+        assertEquals("models/gemini-3.8-live", setup.get("model").asString)
+        assertEquals("AUDIO", setup.getAsJsonArray("responseModalities").single().asString)
+        assertFalse(setup.getAsJsonObject("generationConfig").has("responseModalities"))
+        assertEquals(
+            "Puck",
+            setup.getAsJsonObject("generationConfig")
+                .getAsJsonObject("speechConfig")
+                .getAsJsonObject("voiceConfig")
+                .getAsJsonObject("prebuiltVoiceConfig")
+                .get("voiceName")
+                .asString,
+        )
+        assertEquals(
+            "en-US",
+            setup.getAsJsonObject("inputAudioTranscription")
+                .getAsJsonArray("languageCodes")
+                .single()
+                .asString,
+        )
+        assertTrue(setup.has("outputAudioTranscription"))
+    }
+
     @Test
     fun listsOnlyRequestedModelsAndRecognizesLiveModel() = runBlocking {
         val transport = FakeTransport(

@@ -24,8 +24,41 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
+internal fun buildGeminiLiveSetup(modelId: String, preferences: UserPreferences): JsonObject =
+    JsonObject().apply {
+        add("setup", JsonObject().apply {
+            addProperty("model", "models/$modelId")
+            add("responseModalities", com.google.gson.JsonArray().apply { add("AUDIO") })
+            add("generationConfig", JsonObject().apply {
+                add("speechConfig", JsonObject().apply {
+                    add("voiceConfig", JsonObject().apply {
+                        add("prebuiltVoiceConfig", JsonObject().apply {
+                            addProperty(
+                                "voiceName",
+                                if (preferences.audioVoice == "voice_two") "Puck" else "Kore",
+                            )
+                        })
+                    })
+                })
+            })
+            add("inputAudioTranscription", JsonObject().apply {
+                add("languageCodes", com.google.gson.JsonArray().apply {
+                    add(
+                        when (preferences.audioLanguage) {
+                            "turkish" -> "tr-TR"
+                            "english" -> "en-US"
+                            else -> "fa-IR"
+                        },
+                    )
+                })
+            })
+            add("outputAudioTranscription", JsonObject())
+        })
+    }
+
 enum class GeminiLiveState {
     Connecting,
+    Configuring,
     Active,
     Failed,
     Closed,
@@ -61,6 +94,7 @@ class GeminiLiveSession(
     @Volatile private var previousSpeakerState: Boolean? = null
     @Volatile private var previousCommunicationDevice: android.media.AudioDeviceInfo? = null
     @Volatile private var currentModelIndex = -1
+    @Volatile private var stageTimeout: Runnable? = null
 
     fun start() {
         if (liveModels.isEmpty()) {
@@ -110,6 +144,7 @@ class GeminiLiveSession(
 
     fun close() {
         if (!isClosed.compareAndSet(false, true)) return
+        clearStageTimeout()
         stopAudio()
         webSocket?.close(1000, "User ended session")
         webSocket = null
@@ -142,6 +177,11 @@ class GeminiLiveSession(
         currentModelIndex = nextIndex
         report(GeminiLiveState.Connecting, null)
         val model = liveModels[nextIndex]
+        scheduleStageTimeout(
+            modelIndex = nextIndex,
+            timeoutMillis = CONNECT_TIMEOUT_MILLIS,
+            message = appContext.getString(R.string.live_connection_timeout, model.id),
+        )
         val encodedKey = URLEncoder.encode(apiKey, Charsets.UTF_8.name())
         val request = Request.Builder()
             .url("$LIVE_ENDPOINT?key=$encodedKey")
@@ -157,41 +197,18 @@ class GeminiLiveSession(
         private val modelIndex: Int,
     ) : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
-            val setup = JsonObject().apply {
-                add("setup", JsonObject().apply {
-                    addProperty("model", "models/${model.id}")
-                    add("generationConfig", JsonObject().apply {
-                        add("responseModalities", com.google.gson.JsonArray().apply {
-                            add("AUDIO")
-                        })
-                        add("speechConfig", JsonObject().apply {
-                            add("voiceConfig", JsonObject().apply {
-                                add("prebuiltVoiceConfig", JsonObject().apply {
-                                    addProperty(
-                                        "voiceName",
-                                        if (preferences.audioVoice == "voice_two") "Puck" else "Kore",
-                                    )
-                                })
-                            })
-                        })
-                    })
-                    add("inputAudioTranscription", JsonObject().apply {
-                        add("languageCodes", com.google.gson.JsonArray().apply {
-                            add(
-                                when (preferences.audioLanguage) {
-                                    "turkish" -> "tr-TR"
-                                    "english" -> "en-US"
-                                    else -> "fa-IR"
-                                },
-                            )
-                        })
-                    })
-                    add("outputAudioTranscription", JsonObject())
-                })
-            }
-            if (!webSocket.send(setup.toString())) {
+            if (modelIndex != currentModelIndex || isClosed.get()) return
+            clearStageTimeout()
+            report(GeminiLiveState.Configuring, null)
+            if (!webSocket.send(buildGeminiLiveSetup(model.id, preferences).toString())) {
                 fail("ارسال پیکربندی Gemini Live انجام نشد.")
+                return
             }
+            scheduleStageTimeout(
+                modelIndex = modelIndex,
+                timeoutMillis = SETUP_TIMEOUT_MILLIS,
+                message = appContext.getString(R.string.live_setup_timeout, model.id),
+            )
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
@@ -212,6 +229,7 @@ class GeminiLiveSession(
                     return
                 }
                 if (message.has("setupComplete")) {
+                    clearStageTimeout()
                     if (!startAudio()) return
                     report(GeminiLiveState.Active, model.displayName)
                 }
@@ -223,6 +241,7 @@ class GeminiLiveSession(
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             if (isClosed.get() || hasFailed.get() || modelIndex != currentModelIndex) return
+            clearStageTimeout()
             if (response?.code == HTTP_TOO_MANY_REQUESTS && modelIndex == currentModelIndex) {
                 connectToNextModel()
             } else {
@@ -241,10 +260,33 @@ class GeminiLiveSession(
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             if (!isClosed.get() && !hasFailed.get() && modelIndex == currentModelIndex) {
+                clearStageTimeout()
                 stopAudio()
                 report(GeminiLiveState.Closed, null)
             }
         }
+    }
+
+    private fun scheduleStageTimeout(
+        modelIndex: Int,
+        timeoutMillis: Long,
+        message: String,
+    ) {
+        clearStageTimeout()
+        val timeout = Runnable {
+            if (!isClosed.get() && !hasFailed.get() &&
+                currentModelIndex == modelIndex && !isRecording.get()
+            ) {
+                fail(message)
+            }
+        }
+        stageTimeout = timeout
+        mainHandler.postDelayed(timeout, timeoutMillis)
+    }
+
+    private fun clearStageTimeout() {
+        stageTimeout?.let(mainHandler::removeCallbacks)
+        stageTimeout = null
     }
 
     private fun handleServerContent(serverContent: JsonObject?) {
@@ -412,6 +454,7 @@ class GeminiLiveSession(
 
     private fun fail(message: String) {
         if (!hasFailed.compareAndSet(false, true)) return
+        clearStageTimeout()
         stopAudio()
         restoreAudioRouting()
         webSocket?.cancel()
@@ -440,6 +483,8 @@ class GeminiLiveSession(
         private const val HTTP_TOO_MANY_REQUESTS = 429
         private const val HTTP_UNAUTHORIZED = 401
         private const val HTTP_FORBIDDEN = 403
+        private const val CONNECT_TIMEOUT_MILLIS = 25_000L
+        private const val SETUP_TIMEOUT_MILLIS = 15_000L
         private const val INPUT_SAMPLE_RATE = 16_000
         private const val OUTPUT_SAMPLE_RATE = 24_000
         private const val INPUT_CHUNK_SAMPLES = 2_048

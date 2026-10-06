@@ -1069,6 +1069,7 @@ internal fun VoiceScreen(
                         isCameraActive && liveState == GeminiLiveState.Active ->
                             R.string.voice_camera_streaming
                         liveState == GeminiLiveState.Connecting -> R.string.voice_live_connecting
+                        liveState == GeminiLiveState.Configuring -> R.string.voice_live_configuring
                         liveState == GeminiLiveState.Active -> R.string.voice_live_active
                         liveState == GeminiLiveState.Failed -> R.string.voice_live_unavailable
                         else -> R.string.voice_unavailable_notice

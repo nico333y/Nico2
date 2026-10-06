@@ -128,6 +128,9 @@
     <string name="voice_live_start">Start live conversation</string>
     <string name="voice_live_active">Live conversation is active</string>
     <string name="voice_live_connecting">Connecting to Gemini Live…</string>
+    <string name="voice_live_configuring">Connected; waiting for Gemini Live configuration confirmation…</string>
+    <string name="live_connection_timeout">Could not connect to model %1$s within 25 seconds. Check your internet connection.</string>
+    <string name="live_setup_timeout">Model %1$s connected but did not confirm setup within 15 seconds.</string>
     <string name="voice_live_unavailable">Gemini Live model or connection is unavailable.</string>
     <string name="voice_permission_denied">Microphone permission is required for voice chat.</string>
     <string name="voice_camera_unavailable">Could not start the live camera. Check camera permission and availability.</string>
