@@ -100,7 +100,8 @@ class GeminiLiveSession(
     @Volatile private var stageTimeout: Runnable? = null
     @Volatile private var setupConfirmed = false
     @Volatile private var setupSent = false
-    @Volatile private var lastSetupResponse: String? = null
+    @Volatile private var setupResponseCount = 0
+    @Volatile private var lastSetupResponseFields = ""
 
     fun start() {
         if (!hasStarted.compareAndSet(false, true)) return
@@ -181,7 +182,8 @@ class GeminiLiveSession(
         val model = liveModel ?: return
         setupConfirmed = false
         setupSent = false
-        lastSetupResponse = null
+        setupResponseCount = 0
+        lastSetupResponseFields = ""
         report(GeminiLiveState.Connecting, null)
         scheduleStageTimeout(
             modelIndex = currentModelIndex,
@@ -216,12 +218,15 @@ class GeminiLiveSession(
                 modelIndex = modelIndex,
                 timeoutMillis = SETUP_TIMEOUT_MILLIS,
                 message = {
-                    buildString {
-                        append(appContext.getString(R.string.live_setup_timeout, model.id))
-                        lastSetupResponse?.let {
-                            append("\nپاسخ دریافتی از سرور: ")
-                            append(it)
-                        }
+                    if (setupResponseCount == 0) {
+                        appContext.getString(R.string.live_setup_no_response, model.id)
+                    } else {
+                        appContext.getString(
+                            R.string.live_setup_unconfirmed_response,
+                            model.id,
+                            setupResponseCount,
+                            lastSetupResponseFields,
+                        )
                     }
                 },
             )
@@ -252,13 +257,17 @@ class GeminiLiveSession(
 
             if (!setupConfirmed && message.get("setupComplete")?.isJsonObject == true) {
                 setupConfirmed = true
-                lastSetupResponse = null
+                lastSetupResponseFields = ""
                 clearStageTimeout()
                 report(GeminiLiveState.Ready, null)
                 if (!startAudio()) return
             }
             if (!setupConfirmed) {
-                lastSetupResponse = "فیلدهای پاسخ: ${message.keySet().joinToString().take(120)}"
+                setupResponseCount += 1
+                lastSetupResponseFields = message.keySet()
+                    .take(8)
+                    .joinToString()
+                    .take(MAX_DIAGNOSTIC_LENGTH)
                 return
             }
             message.get("serverContent")

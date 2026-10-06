@@ -132,7 +132,9 @@
     <string name="voice_live_ready">Dinlemeye hazır</string>
     <string name="voice_live_responding">Gemini yanıt veriyor</string>
     <string name="live_connection_timeout">%1$s modeline 25 saniye içinde bağlanılamadı. İnternet bağlantınızı kontrol edin.</string>
-    <string name="live_setup_timeout">%1$s modeli bağlandı ancak yapılandırmayı 15 saniye içinde onaylamadı.</string>
+    <string name="live_setup_timeout">%1$s modeli için kurulum onayı alınmadı.</string>
+    <string name="live_setup_no_response">%1$s modeline WebSocket bağlandı ve setup mesajı gönderildi; ancak sunucudan 15 saniye içinde yanıt gelmedi. Mikrofon başlatılmadı. Hata ses başlatılmadan önce oluştu ve bu bağlantı sunucu nedenini döndürmedi.</string>
+    <string name="live_setup_unconfirmed_response">%1$s modeli %2$d WebSocket mesajı gönderdi, ancak hiçbiri setupComplete içermedi. Alınan alanlar: %3$s</string>
     <string name="voice_live_unavailable">Gemini Live modeli veya bağlantısı kullanılamıyor.</string>
     <string name="voice_permission_denied">Sesli sohbet için mikrofon izni gerekir.</string>
     <string name="voice_camera_unavailable">Canlı kamera başlatılamadı. Kamera iznini ve kullanılabilirliğini kontrol edin.</string>
