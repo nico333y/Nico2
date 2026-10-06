@@ -782,7 +782,7 @@ internal fun VoiceScreen(
             isLiveActive = true
             liveDetail = null
         } else {
-            liveState = GeminiLiveState.Failed
+            liveState = GeminiLiveState.Error
             liveDetail = context.getString(R.string.voice_permission_denied)
         }
     }
@@ -807,7 +807,7 @@ internal fun VoiceScreen(
                 onState = { state, detail ->
                     liveState = state
                     liveDetail = detail
-                    if (state == GeminiLiveState.Failed || state == GeminiLiveState.Closed) {
+                    if (state == GeminiLiveState.Error || state == GeminiLiveState.Closed) {
                         isLiveActive = false
                         isCameraActive = false
                     }
@@ -844,11 +844,11 @@ internal fun VoiceScreen(
     val startLive: () -> Unit = {
         when {
             apiKey.isNullOrBlank() -> {
-                liveState = GeminiLiveState.Failed
+                liveState = GeminiLiveState.Error
                 liveDetail = context.getString(R.string.api_key_missing)
             }
             liveModels.isEmpty() -> {
-                liveState = GeminiLiveState.Failed
+                liveState = GeminiLiveState.Error
                 liveDetail = context.getString(R.string.voice_live_unavailable)
             }
             context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
@@ -921,28 +921,20 @@ internal fun VoiceScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f),
-                    state = if (
-                        liveState == GeminiLiveState.Connecting ||
-                        liveState == GeminiLiveState.Configuring
-                    ) {
-                        OrbVisualState.Connecting
-                    } else {
-                        OrbVisualState.Calm
+                    state = when (liveState) {
+                        GeminiLiveState.Connecting, GeminiLiveState.Configuring ->
+                            OrbVisualState.Connecting
+                        GeminiLiveState.Listening -> OrbVisualState.Listening
+                        GeminiLiveState.Responding -> OrbVisualState.Responding
+                        else -> OrbVisualState.Calm
                     },
                     reducedMotion = reduceAnimations,
                 )
-                Text(
-                    text = "گفتگوی صوتی در این نسخه فعال نیست.",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 12.dp),
-                    color = SecondaryText,
-                    style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Center,
-                )
             }
 
-            if (isCameraActive && isLiveActive && liveState == GeminiLiveState.Active &&
+            if (isCameraActive && isLiveActive &&
+                (liveState == GeminiLiveState.Listening ||
+                    liveState == GeminiLiveState.Responding) &&
                 lifecycleOwner != null
             ) {
                 LiveCameraPreview(
@@ -997,12 +989,18 @@ internal fun VoiceScreen(
             Text(
                 liveDetail ?: stringResource(
                     when {
-                        isCameraActive && liveState == GeminiLiveState.Active ->
+                        isCameraActive &&
+                            (liveState == GeminiLiveState.Listening ||
+                                liveState == GeminiLiveState.Responding) ->
                             R.string.voice_camera_streaming
                         liveState == GeminiLiveState.Connecting -> R.string.voice_live_connecting
                         liveState == GeminiLiveState.Configuring -> R.string.voice_live_configuring
-                        liveState == GeminiLiveState.Active -> R.string.voice_live_active
-                        liveState == GeminiLiveState.Failed -> R.string.voice_live_unavailable
+                        liveState == GeminiLiveState.Ready ||
+                            liveState == GeminiLiveState.Listening ->
+                            R.string.voice_live_ready
+                        liveState == GeminiLiveState.Responding ->
+                            R.string.voice_live_responding
+                        liveState == GeminiLiveState.Error -> R.string.voice_live_unavailable
                         else -> R.string.voice_unavailable_notice
                     },
                 ),

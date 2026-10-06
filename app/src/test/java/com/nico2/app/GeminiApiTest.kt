@@ -10,13 +10,11 @@ import org.junit.Test
 class GeminiApiTest {
     @Test
     fun liveSetupUsesLiveApiResponseModalitiesShape() {
-        val setup = buildGeminiLiveSetup(
-            modelId = "gemini-3.8-live",
-            preferences = UserPreferences(audioVoice = "voice_two", audioLanguage = "english"),
-        ).getAsJsonObject("setup")
+        val setup = buildGeminiLiveSetup("gemini-3.8-live").getAsJsonObject("setup")
 
         assertEquals("models/gemini-3.8-live", setup.get("model").asString)
-        assertFalse(setup.has("responseModalities"))
+        assertEquals(2, setup.size())
+        assertFalse(setup.has("thinkingConfig"))
         assertEquals(
             "AUDIO",
             setup.getAsJsonObject("generationConfig")
@@ -24,23 +22,14 @@ class GeminiApiTest {
                 .single()
                 .asString,
         )
-        assertEquals(
-            "Puck",
-            setup.getAsJsonObject("generationConfig")
-                .getAsJsonObject("speechConfig")
-                .getAsJsonObject("voiceConfig")
-                .getAsJsonObject("prebuiltVoiceConfig")
-                .get("voiceName")
-                .asString,
-        )
-        assertEquals(
-            "en-US",
-            setup.getAsJsonObject("inputAudioTranscription")
-                .getAsJsonArray("languageCodes")
-                .single()
-                .asString,
-        )
-        assertTrue(setup.has("outputAudioTranscription"))
+        assertEquals(1, setup.getAsJsonObject("generationConfig").size())
+    }
+
+    @Test
+    fun liveSetupDoesNotDuplicateModelResourcePrefix() {
+        val setup = buildGeminiLiveSetup("models/gemini-3.8-live").getAsJsonObject("setup")
+
+        assertEquals("models/gemini-3.8-live", setup.get("model").asString)
     }
 
     @Test
@@ -54,7 +43,7 @@ class GeminiApiTest {
         assertFalse(diagnostic.contains(apiKey))
         assertFalse(diagnostic.contains("AIzaSy0123456789012345678901234567890123"))
         assertTrue(diagnostic.contains("[REDACTED]"))
-        assertEquals(900, sanitizeLiveDiagnostic("x".repeat(1_000), "").length)
+        assertEquals(320, sanitizeLiveDiagnostic("x".repeat(1_000), "").length)
     }
 
     @Test

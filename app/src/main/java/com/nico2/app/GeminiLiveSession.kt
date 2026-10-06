@@ -26,37 +26,18 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
-private const val MAX_DIAGNOSTIC_LENGTH = 900
+private const val MAX_DIAGNOSTIC_LENGTH = 320
 
-internal fun buildGeminiLiveSetup(modelId: String, preferences: UserPreferences): JsonObject =
+internal fun buildGeminiLiveSetup(modelId: String): JsonObject =
     JsonObject().apply {
         add("setup", JsonObject().apply {
-            addProperty("model", "models/$modelId")
+            addProperty(
+                "model",
+                if (modelId.startsWith("models/")) modelId else "models/$modelId",
+            )
             add("generationConfig", JsonObject().apply {
                 add("responseModalities", com.google.gson.JsonArray().apply { add("AUDIO") })
-                add("speechConfig", JsonObject().apply {
-                    add("voiceConfig", JsonObject().apply {
-                        add("prebuiltVoiceConfig", JsonObject().apply {
-                            addProperty(
-                                "voiceName",
-                                if (preferences.audioVoice == "voice_two") "Puck" else "Kore",
-                            )
-                        })
-                    })
-                })
             })
-            add("inputAudioTranscription", JsonObject().apply {
-                add("languageCodes", com.google.gson.JsonArray().apply {
-                    add(
-                        when (preferences.audioLanguage) {
-                            "turkish" -> "tr-TR"
-                            "english" -> "en-US"
-                            else -> "fa-IR"
-                        },
-                    )
-                })
-            })
-            add("outputAudioTranscription", JsonObject())
         })
     }
 
@@ -78,8 +59,10 @@ internal fun sanitizeLiveDiagnostic(text: String, apiKey: String): String {
 enum class GeminiLiveState {
     Connecting,
     Configuring,
-    Active,
-    Failed,
+    Ready,
+    Listening,
+    Responding,
+    Error,
     Closed,
 }
 
@@ -97,7 +80,8 @@ class GeminiLiveSession(
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
-    private val liveModels = liveFallbackOrder(availableModels)
+    private val liveModel = availableModels.firstOrNull { it.supportsLive }
+    private val hasStarted = AtomicBoolean(false)
     private val isClosed = AtomicBoolean(false)
     private val hasFailed = AtomicBoolean(false)
     private val isRecording = AtomicBoolean(false)
@@ -112,25 +96,26 @@ class GeminiLiveSession(
     @Volatile private var previousAudioMode: Int? = null
     @Volatile private var previousSpeakerState: Boolean? = null
     @Volatile private var previousCommunicationDevice: android.media.AudioDeviceInfo? = null
-    @Volatile private var currentModelIndex = -1
+    @Volatile private var currentModelIndex = 0
     @Volatile private var stageTimeout: Runnable? = null
     @Volatile private var setupConfirmed = false
+    @Volatile private var setupSent = false
     @Volatile private var lastSetupResponse: String? = null
-    @Volatile private var lastAttemptFailure: String? = null
 
     fun start() {
-        if (liveModels.isEmpty()) {
-            report(GeminiLiveState.Failed, "برای این کلید، مدل Gemini Live در دسترس نیست.")
+        if (!hasStarted.compareAndSet(false, true)) return
+        if (liveModel == null) {
+            report(GeminiLiveState.Error, "برای این کلید، مدل Gemini Live در دسترس نیست.")
             return
         }
-        connectToNextModel()
+        connect()
     }
 
     fun setMuted(muted: Boolean) {
         inputMuted.set(muted)
     }
 
-    fun setSpeakerOutput(enabled: Boolean) {
+    fun setSpeakerOutput(enabled: Boolean): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val targetType = if (enabled) {
                 android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
@@ -140,11 +125,13 @@ class GeminiLiveSession(
             val target = audioManager.availableCommunicationDevices
                 .firstOrNull { it.type == targetType }
             if (target == null || !audioManager.setCommunicationDevice(target)) {
-                report(GeminiLiveState.Failed, "تغییر مسیر خروجی صدا انجام نشد.")
+                report(GeminiLiveState.Error, "تغییر مسیر خروجی صدا انجام نشد.")
+                return false
             }
         } else {
             setLegacySpeakerOutput(enabled)
         }
+        return true
     }
 
     fun sendVideoFrame(jpeg: ByteArray): Boolean {
@@ -168,7 +155,7 @@ class GeminiLiveSession(
         if (!isClosed.compareAndSet(false, true)) return
         clearStageTimeout()
         stopAudio()
-        webSocket?.close(1000, "User ended session")
+        webSocket?.cancel()
         webSocket = null
         client.dispatcher.cancelAll()
         client.connectionPool.evictAll()
@@ -189,20 +176,15 @@ class GeminiLiveSession(
         }
     }
 
-    private fun connectToNextModel() {
+    private fun connect() {
         if (isClosed.get()) return
-        val nextIndex = currentModelIndex + 1
-        if (nextIndex >= liveModels.size) {
-            fail(lastAttemptFailure ?: "سهمیه یا اتصال مدل‌های Live در دسترس نیست.")
-            return
-        }
-        currentModelIndex = nextIndex
+        val model = liveModel ?: return
         setupConfirmed = false
+        setupSent = false
         lastSetupResponse = null
         report(GeminiLiveState.Connecting, null)
-        val model = liveModels[nextIndex]
         scheduleStageTimeout(
-            modelIndex = nextIndex,
+            modelIndex = currentModelIndex,
             timeoutMillis = CONNECT_TIMEOUT_MILLIS,
             message = { appContext.getString(R.string.live_connection_timeout, model.id) },
         )
@@ -212,7 +194,7 @@ class GeminiLiveSession(
             .build()
         webSocket = client.newWebSocket(
             request,
-            LiveSocketListener(model, nextIndex),
+            LiveSocketListener(model, currentModelIndex),
         )
     }
 
@@ -224,7 +206,9 @@ class GeminiLiveSession(
             if (modelIndex != currentModelIndex || isClosed.get()) return
             clearStageTimeout()
             report(GeminiLiveState.Configuring, null)
-            if (!webSocket.send(buildGeminiLiveSetup(model.id, preferences).toString())) {
+            if (setupSent) return
+            setupSent = true
+            if (!webSocket.send(buildGeminiLiveSetup(model.id).toString())) {
                 fail("ارسال پیکربندی Gemini Live انجام نشد.")
                 return
             }
@@ -248,55 +232,34 @@ class GeminiLiveSession(
             val parsed = try {
                 JsonParser.parseString(text)
             } catch (error: JsonParseException) {
-                fail(
-                    "پاسخ JSON از Gemini Live قابل پردازش نبود: " +
-                        sanitizeLiveDiagnostic(
-                            "${error.javaClass.simpleName}: ${error.message.orEmpty()}; پاسخ=$text",
-                            apiKey,
-                        ),
-                )
+                fail("پاسخ JSON از Gemini Live قابل پردازش نبود (${error.javaClass.simpleName}).")
                 return
             }
             if (!parsed.isJsonObject) {
-                fail("پاسخ Gemini Live از نوع JSON object نبود: ${sanitizeLiveDiagnostic(text, apiKey)}")
+                fail("پاسخ Gemini Live از نوع JSON object نبود.")
                 return
             }
             val message = parsed.asJsonObject
 
-            val serverError = message.get("error")?.takeUnless { it.isJsonNull }
+            val serverError = message.get("setupError")
+                ?.takeUnless { it.isJsonNull }
+                ?: message.get("error")?.takeUnless { it.isJsonNull }
             if (serverError != null) {
                 val details = sanitizeLiveDiagnostic(serverError.toString(), apiKey)
-                val errorObject = serverError.takeIf { it.isJsonObject }?.asJsonObject
-                val code = errorObject?.get("code")
-                    ?.takeUnless { it.isJsonNull }
-                    ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }
-                    ?.asInt
-                val status = errorObject?.get("status")
-                    ?.takeUnless { it.isJsonNull }
-                    ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
-                    ?.asString
-                val failure = "Gemini Live پاسخ خطا داد: $details"
-                if ((code == HTTP_TOO_MANY_REQUESTS || status == "RESOURCE_EXHAUSTED") &&
-                    modelIndex == currentModelIndex
-                ) {
-                    lastAttemptFailure = failure
-                    webSocket.close(1000, "Quota exhausted")
-                    connectToNextModel()
-                } else {
-                    fail(failure)
-                }
+                fail("Gemini Live setup رد شد: $details")
                 return
             }
 
-            if (!setupConfirmed) {
-                lastSetupResponse = sanitizeLiveDiagnostic(message.toString(), apiKey)
-            }
-            if (message.has("setupComplete")) {
+            if (!setupConfirmed && message.get("setupComplete")?.isJsonObject == true) {
                 setupConfirmed = true
                 lastSetupResponse = null
                 clearStageTimeout()
+                report(GeminiLiveState.Ready, null)
                 if (!startAudio()) return
-                report(GeminiLiveState.Active, model.displayName)
+            }
+            if (!setupConfirmed) {
+                lastSetupResponse = "فیلدهای پاسخ: ${message.keySet().joinToString().take(120)}"
+                return
             }
             message.get("serverContent")
                 ?.takeIf { it.isJsonObject }
@@ -307,13 +270,8 @@ class GeminiLiveSession(
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             if (isClosed.get() || hasFailed.get() || modelIndex != currentModelIndex) return
             clearStageTimeout()
-            if (response?.code == HTTP_TOO_MANY_REQUESTS && modelIndex == currentModelIndex) {
-                lastAttemptFailure = formatHandshakeFailure(model, t, response)
-                connectToNextModel()
-            } else {
-                stopAudio()
-                fail(formatHandshakeFailure(model, t, response))
-            }
+            stopAudio()
+            fail(formatHandshakeFailure(model, t, response))
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
@@ -323,8 +281,7 @@ class GeminiLiveSession(
                 val safeReason = sanitizeLiveDiagnostic(reason, apiKey)
                 val closeDetail = "Gemini Live بستن اتصال را اعلام کرد: code=$code" +
                     if (safeReason.isBlank()) "" else "، reason=$safeReason"
-                if (!setupConfirmed) fail(closeDetail)
-                else report(GeminiLiveState.Closed, closeDetail)
+                fail(closeDetail)
             }
         }
     }
@@ -386,16 +343,27 @@ class GeminiLiveSession(
 
     private fun handleServerContent(serverContent: JsonObject?) {
         if (serverContent == null) return
-        serverContent.getAsJsonObject("modelTurn")
-            ?.getAsJsonArray("parts")
-            ?.forEach { part ->
-                val inlineData = part.asJsonObject.getAsJsonObject("inlineData")
-                val encodedAudio = inlineData?.get("data")?.asString
-                if (!encodedAudio.isNullOrBlank()) {
-                    val pcm = Base64.decode(encodedAudio, Base64.DEFAULT)
-                    audioTrack?.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
-                }
+        val parts = serverContent.get("modelTurn")
+            ?.takeIf { it.isJsonObject }
+            ?.asJsonObject
+            ?.get("parts")
+            ?.takeIf { it.isJsonArray }
+            ?.asJsonArray
+        parts?.forEach { part ->
+            val inlineData = part.takeIf { it.isJsonObject }
+                ?.asJsonObject
+                ?.get("inlineData")
+                ?.takeIf { it.isJsonObject }
+                ?.asJsonObject
+            val encodedAudio = inlineData?.get("data")
+                ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
+                ?.asString
+            if (!encodedAudio.isNullOrBlank()) {
+                val pcm = Base64.decode(encodedAudio, Base64.DEFAULT)
+                audioTrack?.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
+                report(GeminiLiveState.Responding, null)
             }
+        }
         serverContent.getAsJsonObject("inputTranscription")
             ?.get("text")
             ?.takeUnless { it.isJsonNull }
@@ -414,9 +382,11 @@ class GeminiLiveSession(
                 ?.let { reportTranscript(isUser = false, it) }
             inputTranscript.clear()
             outputTranscript.clear()
+            report(GeminiLiveState.Listening, null)
         }
         if (serverContent.get("interrupted")?.asBoolean == true) {
             outputTranscript.clear()
+            report(GeminiLiveState.Listening, null)
         }
     }
 
@@ -431,7 +401,7 @@ class GeminiLiveSession(
                 previousSpeakerState = isLegacySpeakerOutputEnabled()
             }
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-            setSpeakerOutput(true)
+            check(setSpeakerOutput(true)) { "تغییر مسیر خروجی صدا انجام نشد." }
 
             val inputMin = AudioRecord.getMinBufferSize(
                 INPUT_SAMPLE_RATE,
@@ -480,6 +450,7 @@ class GeminiLiveSession(
 
             recorder.startRecording()
             audioTrack?.play()
+            report(GeminiLiveState.Listening, null)
             thread(name = "gemini-live-audio-input") {
                 val samples = ShortArray(INPUT_CHUNK_SAMPLES)
                 while (isRecording.get() && !isClosed.get()) {
@@ -529,7 +500,7 @@ class GeminiLiveSession(
                     recorder.stop()
                 }
             } catch (_: IllegalStateException) {
-                report(GeminiLiveState.Failed, "بستن میکروفون با خطا روبه‌رو شد.")
+                report(GeminiLiveState.Error, "بستن میکروفون با خطا روبه‌رو شد.")
             } finally {
                 recorder.release()
                 audioRecord = null
@@ -539,7 +510,7 @@ class GeminiLiveSession(
             try {
                 if (track.playState == AudioTrack.PLAYSTATE_PLAYING) track.stop()
             } catch (_: IllegalStateException) {
-                report(GeminiLiveState.Failed, "بستن خروجی صوتی با خطا روبه‌رو شد.")
+                report(GeminiLiveState.Error, "بستن خروجی صوتی با خطا روبه‌رو شد.")
             } finally {
                 track.release()
                 audioTrack = null
@@ -553,7 +524,7 @@ class GeminiLiveSession(
         stopAudio()
         restoreAudioRouting()
         webSocket?.cancel()
-        report(GeminiLiveState.Failed, message)
+        report(GeminiLiveState.Error, message)
     }
 
     private fun report(state: GeminiLiveState, detail: String?) {
@@ -575,7 +546,6 @@ class GeminiLiveSession(
     companion object {
         private const val LIVE_ENDPOINT =
             "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
-        private const val HTTP_TOO_MANY_REQUESTS = 429
         private const val CONNECT_TIMEOUT_MILLIS = 25_000L
         private const val SETUP_TIMEOUT_MILLIS = 15_000L
         private const val MAX_ERROR_BODY_BYTES = 8_192L

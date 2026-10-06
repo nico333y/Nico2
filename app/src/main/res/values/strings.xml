@@ -129,6 +129,8 @@
     <string name="voice_live_active">گفتگوی زنده فعال است</string>
     <string name="voice_live_connecting">در حال اتصال به Gemini Live…</string>
     <string name="voice_live_configuring">اتصال برقرار شد؛ در انتظار تأیید پیکربندی Gemini Live…</string>
+    <string name="voice_live_ready">آمادهٔ شنیدن</string>
+    <string name="voice_live_responding">Gemini در حال پاسخ‌گویی است</string>
     <string name="live_connection_timeout">اتصال به مدل %1$s در ۲۵ ثانیه برقرار نشد. اینترنت و دسترسی شبکه را بررسی کن.</string>
     <string name="live_setup_timeout">مدل %1$s اتصال را باز کرد، اما پیکربندی را در ۱۵ ثانیه تأیید نکرد.</string>
     <string name="voice_live_unavailable">مدل یا اتصال Gemini Live در دسترس نیست.</string>
