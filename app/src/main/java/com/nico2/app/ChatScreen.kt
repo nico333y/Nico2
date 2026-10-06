@@ -244,7 +244,7 @@ private fun ChatContent() {
                 val models = geminiApi.listModels(savedKey)
                 availableModels = models
                 selectedModel = models.firstOrNull {
-                    it.id == userPreferences.selectedModel && it.supportsText
+                    it.id == userPreferences.selectedModel && (it.supportsText || it.supportsLive)
                 }?.id ?: preferredTextModel(models)?.id.orEmpty()
                 userPreferences = userPreferences.copy(selectedModel = selectedModel).also {
                     it.write(context)
@@ -471,13 +471,26 @@ private fun ChatContent() {
                             ),
                         )
                     }
-                    val (usedModel, answer) = geminiApi.generateReply(
-                        apiKey = apiKey,
-                        selectedModelId = selectedModel,
-                        availableModels = availableModels,
-                        turns = turns,
-                        systemInstruction = buildAssistantInstruction(userPreferences),
-                    )
+                    val liveModelSelected = availableModels.any {
+                        it.id == selectedModel && it.supportsLive
+                    }
+                    val (usedModel, answer) = if (liveModelSelected) {
+                        selectedModel to generateGeminiLiveTextReply(
+                            context = context,
+                            apiKey = apiKey,
+                            modelId = selectedModel,
+                            turns = turns,
+                            systemInstruction = buildAssistantInstruction(userPreferences),
+                        )
+                    } else {
+                        geminiApi.generateReply(
+                            apiKey = apiKey,
+                            selectedModelId = selectedModel,
+                            availableModels = availableModels,
+                            turns = turns,
+                            systemInstruction = buildAssistantInstruction(userPreferences),
+                        )
+                    }
                     val answerCreatedAt = System.currentTimeMillis()
                     val assistantMessage = Message(
                         id = UUID.randomUUID().toString(),
@@ -551,7 +564,10 @@ private fun ChatContent() {
                 try {
                     val models = geminiApi.listModels(apiKey)
                     availableModels = models
-                    if (models.none { it.id == selectedModel && it.supportsText }) {
+                    if (models.none {
+                            it.id == selectedModel && (it.supportsText || it.supportsLive)
+                        }
+                    ) {
                         selectedModel = preferredTextModel(models)?.id.orEmpty()
                     }
                     userPreferences = userPreferences.copy(selectedModel = selectedModel).also {
@@ -582,7 +598,7 @@ private fun ChatContent() {
                 apiModelsStatus = context.getString(R.string.api_models_loading)
                 try {
                     val models = geminiApi.listModels(candidate)
-                    if (models.none { it.supportsText }) {
+                    if (models.none { it.supportsText || it.supportsLive }) {
                         throw GeminiApiException(
                             0,
                             context.getString(R.string.api_models_empty),
@@ -728,7 +744,7 @@ private fun ChatContent() {
                     }
                     ChatHeader(
                         selectedModel = availableModels.firstOrNull { it.id == selectedModel }?.displayName.orEmpty(),
-                        availableModels = availableModels.filter { it.supportsText },
+                        availableModels = availableModels.filter { it.supportsText || it.supportsLive },
                         isLoadingModels = isLoadingModels,
                         apiKeyConfigured = !geminiApiKey.isNullOrBlank(),
                         showModels = showModels,

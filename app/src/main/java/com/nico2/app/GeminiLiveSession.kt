@@ -12,9 +12,13 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
+import com.google.gson.JsonArray
 import com.google.gson.JsonParseException
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -25,10 +29,19 @@ import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
+import kotlin.coroutines.resumeWithException
 
 private const val MAX_DIAGNOSTIC_LENGTH = 320
+private const val LIVE_CHAT_SETUP_TIMEOUT_MILLIS = 15_000L
+private const val LIVE_CHAT_RESPONSE_TIMEOUT_MILLIS = 60_000L
+private const val LIVE_ENDPOINT =
+    "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
 
-internal fun buildGeminiLiveSetup(modelId: String): JsonObject =
+internal fun buildGeminiLiveSetup(
+    modelId: String,
+    includeOutputAudioTranscription: Boolean = false,
+    systemInstruction: String? = null,
+): JsonObject =
     JsonObject().apply {
         add("setup", JsonObject().apply {
             addProperty(
@@ -36,8 +49,194 @@ internal fun buildGeminiLiveSetup(modelId: String): JsonObject =
                 if (modelId.startsWith("models/")) modelId else "models/$modelId",
             )
             add("responseModalities", com.google.gson.JsonArray().apply { add("AUDIO") })
+            if (includeOutputAudioTranscription) {
+                add("outputAudioTranscription", JsonObject())
+            }
+            systemInstruction?.takeIf(String::isNotBlank)?.let { instruction ->
+                add("systemInstruction", JsonObject().apply {
+                    add("parts", JsonArray().apply {
+                        add(JsonObject().apply { addProperty("text", instruction) })
+                    })
+                })
+            }
         })
     }
+
+internal fun buildGeminiLiveClientContent(turns: List<GeminiTurn>): JsonObject =
+    JsonObject().apply {
+        add("clientContent", JsonObject().apply {
+            add("turns", JsonArray().apply {
+                turns.forEach { turn ->
+                    add(JsonObject().apply {
+                        addProperty("role", if (turn.isUser) "user" else "model")
+                        add("parts", JsonArray().apply {
+                            if (turn.text.isNotBlank()) {
+                                add(JsonObject().apply { addProperty("text", turn.text) })
+                            }
+                        })
+                    })
+                }
+            })
+            addProperty("turnComplete", true)
+        })
+    }
+
+internal suspend fun generateGeminiLiveTextReply(
+    context: Context,
+    apiKey: String,
+    modelId: String,
+    turns: List<GeminiTurn>,
+    systemInstruction: String,
+): String = withContext(Dispatchers.IO) {
+    require(turns.none { turn -> turn.attachments.isNotEmpty() }) {
+        context.getString(R.string.live_text_attachments_unsupported)
+    }
+    suspendCancellableCoroutine { continuation ->
+        val client = OkHttpClient.Builder()
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(0, TimeUnit.MILLISECONDS)
+            .build()
+        val handler = Handler(Looper.getMainLooper())
+        val completed = AtomicBoolean(false)
+        val responseText = StringBuilder()
+        var setupComplete = false
+        var webSocket: WebSocket? = null
+        var timeout: Runnable? = null
+
+        fun finish(result: Result<String>) {
+            if (!completed.compareAndSet(false, true)) return
+            timeout?.let(handler::removeCallbacks)
+            webSocket?.close(1000, "Text turn complete")
+            client.dispatcher.cancelAll()
+            client.connectionPool.evictAll()
+            if (continuation.isActive) continuation.resumeWith(result)
+        }
+
+        fun scheduleTimeout(message: String) {
+            timeout?.let(handler::removeCallbacks)
+            timeout = Runnable { finish(Result.failure(IOException(message))) }
+            handler.postDelayed(
+                timeout!!,
+                if (setupComplete) {
+                    LIVE_CHAT_RESPONSE_TIMEOUT_MILLIS
+                } else {
+                    LIVE_CHAT_SETUP_TIMEOUT_MILLIS
+                },
+            )
+        }
+
+        continuation.invokeOnCancellation {
+            completed.set(true)
+            timeout?.let(handler::removeCallbacks)
+            webSocket?.cancel()
+            client.dispatcher.cancelAll()
+            client.connectionPool.evictAll()
+        }
+
+        val request = Request.Builder()
+            .url("$LIVE_ENDPOINT?key=${URLEncoder.encode(apiKey, Charsets.UTF_8.name())}")
+            .build()
+        webSocket = client.newWebSocket(
+            request,
+            object : WebSocketListener() {
+                override fun onOpen(socket: WebSocket, response: Response) {
+                    webSocket = socket
+                    val setup = buildGeminiLiveSetup(
+                        modelId = modelId,
+                        includeOutputAudioTranscription = true,
+                        systemInstruction = systemInstruction,
+                    )
+                    if (!socket.send(setup.toString())) {
+                        finish(Result.failure(IOException("ارسال setup به Gemini Live انجام نشد.")))
+                        return
+                    }
+                    scheduleTimeout("Gemini Live در زمان تعیین‌شده setup را تأیید نکرد.")
+                }
+
+                override fun onMessage(socket: WebSocket, text: String) {
+                    val message = try {
+                        JsonParser.parseString(text).takeIf { it.isJsonObject }?.asJsonObject
+                            ?: throw JsonParseException("Expected a JSON object.")
+                    } catch (error: JsonParseException) {
+                        finish(Result.failure(IOException("پاسخ Gemini Live قابل پردازش نبود.")))
+                        return
+                    }
+                    val serverError = message.get("setupError")
+                        ?.takeUnless { it.isJsonNull }
+                        ?: message.get("error")?.takeUnless { it.isJsonNull }
+                    if (serverError != null) {
+                        finish(
+                            Result.failure(
+                                IOException(
+                                    "Gemini Live درخواست چت را نپذیرفت: " +
+                                        sanitizeLiveDiagnostic(serverError.toString(), apiKey),
+                                ),
+                            ),
+                        )
+                        return
+                    }
+                    if (!setupComplete && message.get("setupComplete")?.isJsonObject == true) {
+                        setupComplete = true
+                        val content = buildGeminiLiveClientContent(turns)
+                        if (!socket.send(content.toString())) {
+                            finish(Result.failure(IOException("ارسال پیام چت به Gemini Live انجام نشد.")))
+                            return
+                        }
+                        scheduleTimeout("Gemini Live در زمان تعیین‌شده پاسخ متنی نداد.")
+                        return
+                    }
+                    if (!setupComplete) return
+
+                    val serverContent = message.get("serverContent")
+                        ?.takeIf { it.isJsonObject }
+                        ?.asJsonObject ?: return
+                    serverContent.get("outputTranscription")
+                        ?.takeIf { it.isJsonObject }
+                        ?.asJsonObject
+                        ?.get("text")
+                        ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
+                        ?.asString
+                        ?.let(responseText::append)
+                    if (serverContent.get("turnComplete")?.asBoolean == true) {
+                        val answer = responseText.toString().trim()
+                        if (answer.isBlank()) {
+                            finish(Result.failure(IOException("Gemini Live پاسخ متنی برنگرداند.")))
+                        } else {
+                            finish(Result.success(answer))
+                        }
+                    }
+                }
+
+                override fun onFailure(socket: WebSocket, error: Throwable, response: Response?) {
+                    val responseDetail = response?.let {
+                        " HTTP ${it.code} ${sanitizeLiveDiagnostic(it.message, apiKey)}"
+                    }.orEmpty()
+                    finish(
+                        Result.failure(
+                            IOException(
+                                "اتصال چت به Gemini Live ناموفق بود:$responseDetail " +
+                                    error.javaClass.simpleName,
+                            ),
+                        ),
+                    )
+                }
+
+                override fun onClosed(socket: WebSocket, code: Int, reason: String) {
+                    if (!completed.get()) {
+                        finish(
+                            Result.failure(
+                                IOException(
+                                    "Gemini Live اتصال چت را بست: code=$code " +
+                                        sanitizeLiveDiagnostic(reason, apiKey),
+                                ),
+                            ),
+                        )
+                    }
+                }
+            },
+        )
+    }
+}
 
 internal fun sanitizeLiveDiagnostic(text: String, apiKey: String): String {
     var sanitized = text
@@ -551,8 +750,6 @@ class GeminiLiveSession(
     private fun isLegacySpeakerOutputEnabled(): Boolean = audioManager.isSpeakerphoneOn
 
     companion object {
-        private const val LIVE_ENDPOINT =
-            "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
         private const val CONNECT_TIMEOUT_MILLIS = 25_000L
         private const val SETUP_TIMEOUT_MILLIS = 15_000L
         private const val MAX_ERROR_BODY_BYTES = 8_192L

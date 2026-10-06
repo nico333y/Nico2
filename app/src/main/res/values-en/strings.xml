@@ -131,6 +131,7 @@
     <string name="voice_live_configuring">Connected; waiting for Gemini Live configuration confirmation…</string>
     <string name="voice_live_ready">Ready to listen</string>
     <string name="voice_live_responding">Gemini is responding</string>
+    <string name="live_text_attachments_unsupported">Attachments are not supported in text chat with the Live model. Choose a text model.</string>
     <string name="live_connection_timeout">Could not connect to model %1$s within 25 seconds. Check your internet connection.</string>
     <string name="live_setup_timeout">Model %1$s setup confirmation was not received.</string>
     <string name="live_setup_no_response">The WebSocket connected to model %1$s and the setup message was sent, but the server sent no response within 15 seconds. The microphone has not started. The failure is before audio initialization; this connection returned no server cause.</string>

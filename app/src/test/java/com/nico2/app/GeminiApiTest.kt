@@ -25,6 +25,48 @@ class GeminiApiTest {
     }
 
     @Test
+    fun liveChatSetupEnablesOutputTranscriptWithoutChangingAudioModality() {
+        val setup = buildGeminiLiveSetup(
+            modelId = "gemini-3.8-live",
+            includeOutputAudioTranscription = true,
+            systemInstruction = "Be concise.",
+        ).getAsJsonObject("setup")
+
+        assertEquals("AUDIO", setup.getAsJsonArray("responseModalities").single().asString)
+        assertTrue(setup.has("outputAudioTranscription"))
+        assertEquals(
+            "Be concise.",
+            setup.getAsJsonObject("systemInstruction")
+                .getAsJsonArray("parts")
+                .single()
+                .asJsonObject
+                .get("text")
+                .asString,
+        )
+    }
+
+    @Test
+    fun liveChatPayloadIncludesHistoryWithRolesAndCompletesTurn() {
+        val content = buildGeminiLiveClientContent(
+            listOf(
+                GeminiTurn("Question", isUser = true),
+                GeminiTurn("Previous answer", isUser = false),
+            ),
+        ).getAsJsonObject("clientContent")
+
+        assertEquals(2, content.getAsJsonArray("turns").size())
+        assertEquals(
+            "user",
+            content.getAsJsonArray("turns")[0].asJsonObject.get("role").asString,
+        )
+        assertEquals(
+            "model",
+            content.getAsJsonArray("turns")[1].asJsonObject.get("role").asString,
+        )
+        assertTrue(content.get("turnComplete").asBoolean)
+    }
+
+    @Test
     fun liveSetupDoesNotDuplicateModelResourcePrefix() {
         val setup = buildGeminiLiveSetup("models/gemini-3.8-live").getAsJsonObject("setup")
 

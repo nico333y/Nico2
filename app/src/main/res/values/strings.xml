@@ -131,6 +131,7 @@
     <string name="voice_live_configuring">اتصال برقرار شد؛ در انتظار تأیید پیکربندی Gemini Live…</string>
     <string name="voice_live_ready">آمادهٔ شنیدن</string>
     <string name="voice_live_responding">Gemini در حال پاسخ‌گویی است</string>
+    <string name="live_text_attachments_unsupported">پیوست‌ها در گفتگوی متنی با مدل Live پشتیبانی نمی‌شوند؛ یک مدل متنی انتخاب کنید.</string>
     <string name="live_connection_timeout">اتصال به مدل %1$s در ۲۵ ثانیه برقرار نشد. اینترنت و دسترسی شبکه را بررسی کن.</string>
     <string name="live_setup_timeout">تأیید پیکربندی مدل %1$s دریافت نشد.</string>
     <string name="live_setup_no_response">اتصال WebSocket با مدل %1$s باز شد و پیام setup ارسال شد؛ اما در ۱۵ ثانیه هیچ پاسخی از سرور نرسید. میکروفون هنوز شروع نشده است. این خطا پیش از مرحلهٔ صوتی است و علت دقیق سمت سرور از این اتصال قابل دریافت نبود.</string>

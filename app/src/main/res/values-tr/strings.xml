@@ -131,6 +131,7 @@
     <string name="voice_live_configuring">Bağlandı; Gemini Live yapılandırması onaylanıyor…</string>
     <string name="voice_live_ready">Dinlemeye hazır</string>
     <string name="voice_live_responding">Gemini yanıt veriyor</string>
+    <string name="live_text_attachments_unsupported">Live modeliyle metin sohbetinde dosya ekleri desteklenmez. Bir metin modeli seçin.</string>
     <string name="live_connection_timeout">%1$s modeline 25 saniye içinde bağlanılamadı. İnternet bağlantınızı kontrol edin.</string>
     <string name="live_setup_timeout">%1$s modeli için kurulum onayı alınmadı.</string>
     <string name="live_setup_no_response">%1$s modeline WebSocket bağlandı ve setup mesajı gönderildi; ancak sunucudan 15 saniye içinde yanıt gelmedi. Mikrofon başlatılmadı. Hata ses başlatılmadan önce oluştu ve bu bağlantı sunucu nedenini döndürmedi.</string>
