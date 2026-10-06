@@ -1,0 +1,187 @@
+package com.nico2.app
+
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class GeminiApiTest {
+    @Test
+    fun listsOnlyModelsWithTextOrLiveGenerationSupport() = runBlocking {
+        val transport = FakeTransport(
+            GeminiHttpResponse(
+                200,
+                """
+                {
+                  "models": [
+                    {
+                      "name": "models/gemini-3.8-flash",
+                      "displayName": "Gemini 3.8 Flash",
+                      "supportedGenerationMethods": ["generateContent"]
+                    },
+                    {
+                      "name": "models/gemini-3.8-live",
+                      "displayName": "Gemini 3.8 Live",
+                      "supportedGenerationMethods": ["BidiGenerateContent"]
+                    },
+                    {
+                      "name": "models/embedding-model",
+                      "supportedGenerationMethods": ["embedContent"]
+                    }
+                  ]
+                }
+                """.trimIndent(),
+            ),
+        )
+
+        val models = GeminiApiClient(transport).listModels("private-key")
+
+        assertEquals(listOf("gemini-3.8-flash", "gemini-3.8-live"), models.map { it.id }.sorted())
+        assertTrue(models.single { it.supportsLive }.supportsLive)
+        assertTrue(models.single { it.supportsText }.supportsText)
+    }
+
+    @Test
+    fun selectedTextModelIsTriedBeforeOtherAvailableModels() {
+        val models = listOf(
+            GeminiModel("gemini-z", "Zulu", supportsText = true, supportsLive = false),
+            GeminiModel("gemini-a", "Alpha", supportsText = true, supportsLive = false),
+            GeminiModel("gemini-live", "Live", supportsText = false, supportsLive = true),
+        )
+
+        val ordered = GeminiApiClient.textFallbackOrder("gemini-z", models)
+
+        assertEquals(listOf("gemini-z", "gemini-a"), ordered.map { it.id })
+    }
+
+    @Test
+    fun liveFallbackPrefersOfficialLiveModelAndExcludesTextOnlyModels() {
+        val models = listOf(
+            GeminiModel("gemini-live-z", "Zulu Live", supportsText = false, supportsLive = true),
+            GeminiModel("gemini-3.8-live", "Gemini 3.8 Live", supportsText = false, supportsLive = true),
+            GeminiModel("gemini-text", "Text", supportsText = true, supportsLive = false),
+        )
+
+        val ordered = GeminiLiveSession.liveFallbackOrder(models)
+
+        assertEquals(listOf("gemini-3.8-live", "gemini-live-z"), ordered.map { it.id })
+    }
+
+    @Test
+    fun retriesNextTextModelOnQuotaAndReturnsModelUsed() = runBlocking {
+        val transport = FakeTransport(
+            GeminiHttpResponse(429, """{"error":{"message":"quota exceeded"}}"""),
+            GeminiHttpResponse(
+                200,
+                """{"candidates":[{"content":{"parts":[{"text":"پاسخ"}]}}]}""",
+            ),
+        )
+        val models = listOf(
+            GeminiModel("gemini-primary", "Primary", supportsText = true, supportsLive = false),
+            GeminiModel("gemini-fallback", "Fallback", supportsText = true, supportsLive = false),
+        )
+
+        val result = GeminiApiClient(transport).generateReply(
+            apiKey = "private-key",
+            selectedModelId = "gemini-primary",
+            availableModels = models,
+            turns = listOf(GeminiTurn("سلام", isUser = true)),
+            systemInstruction = "Be helpful.",
+        )
+
+        assertEquals("gemini-fallback" to "پاسخ", result)
+        assertEquals(
+            listOf(
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-primary:generateContent",
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-fallback:generateContent",
+            ),
+            transport.urls,
+        )
+    }
+
+    @Test
+    fun sendsImagePartsAndSystemInstructionsToSelectedModel() = runBlocking {
+        val transport = FakeTransport(
+            GeminiHttpResponse(
+                200,
+                """{"candidates":[{"content":{"parts":[{"text":"Image understood"}]}}]}""",
+            ),
+        )
+        val models = listOf(
+            GeminiModel("gemini-text", "Text model", supportsText = true, supportsLive = false),
+        )
+
+        GeminiApiClient(transport).generateReply(
+            apiKey = "private-key",
+            selectedModelId = "gemini-text",
+            availableModels = models,
+            turns = listOf(
+                GeminiTurn(
+                    text = "What is in this image?",
+                    isUser = true,
+                    attachments = listOf(
+                        GeminiInlineAttachment("image/jpeg", byteArrayOf(1, 2, 3)),
+                    ),
+                ),
+            ),
+            systemInstruction = "Reply in the user's language.",
+        )
+
+        val body = transport.bodies.single().orEmpty()
+        assertTrue(body.contains("\"mimeType\":\"image/jpeg\""))
+        assertTrue(body.contains("\"data\":\"AQID\""))
+        assertTrue(body.contains("Reply in the user's language."))
+    }
+
+    @Test
+    fun doesNotRetryOtherModelsForInvalidKeyAndRedactsKeyFromError() = runBlocking {
+        val apiKey = "sensitive-test-key"
+        val transport = FakeTransport(
+            GeminiHttpResponse(401, """{"error":{"message":"Rejected $apiKey"}}"""),
+            GeminiHttpResponse(
+                200,
+                """{"candidates":[{"content":{"parts":[{"text":"should not be used"}]}}]}""",
+            ),
+        )
+        val models = listOf(
+            GeminiModel("gemini-primary", "Primary", supportsText = true, supportsLive = false),
+            GeminiModel("gemini-fallback", "Fallback", supportsText = true, supportsLive = false),
+        )
+
+        val error = assertThrows(GeminiApiException::class.java) {
+            runBlocking {
+                GeminiApiClient(transport).generateReply(
+                    apiKey = apiKey,
+                    selectedModelId = "gemini-primary",
+                    availableModels = models,
+                    turns = listOf(GeminiTurn("سلام", isUser = true)),
+                    systemInstruction = "Be helpful.",
+                )
+            }
+        }
+
+        assertTrue(error.message.orEmpty().contains("[کلید پنهان]"))
+        assertTrue(!error.message.orEmpty().contains(apiKey))
+        assertEquals(1, transport.urls.size)
+    }
+
+    private class FakeTransport(
+        vararg responses: GeminiHttpResponse,
+    ) : GeminiHttpTransport {
+        private val queuedResponses = ArrayDeque(responses.toList())
+        val urls = mutableListOf<String>()
+        val bodies = mutableListOf<String?>()
+
+        override fun execute(
+            apiKey: String,
+            url: String,
+            method: String,
+            body: String?,
+        ): GeminiHttpResponse {
+            urls += url
+            bodies += body
+            return queuedResponses.removeFirst()
+        }
+    }
+}
