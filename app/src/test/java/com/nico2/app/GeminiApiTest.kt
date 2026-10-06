@@ -44,6 +44,20 @@ class GeminiApiTest {
     }
 
     @Test
+    fun liveDiagnosticsRedactApiKeysAndLimitDisplayedLength() {
+        val apiKey = "private-live-key"
+        val diagnostic = sanitizeLiveDiagnostic(
+            """HTTP failure at ?key=$apiKey and key=AIzaSy0123456789012345678901234567890123""",
+            apiKey,
+        )
+
+        assertFalse(diagnostic.contains(apiKey))
+        assertFalse(diagnostic.contains("AIzaSy0123456789012345678901234567890123"))
+        assertTrue(diagnostic.contains("[REDACTED]"))
+        assertEquals(900, sanitizeLiveDiagnostic("x".repeat(1_000), "").length)
+    }
+
+    @Test
     fun listsOnlyRequestedModelsAndRecognizesLiveModel() = runBlocking {
         val transport = FakeTransport(
             GeminiHttpResponse(
