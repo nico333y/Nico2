@@ -6,7 +6,6 @@ import android.content.ContextWrapper
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,14 +17,12 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -62,13 +59,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -92,8 +83,6 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.text.style.TextOverflow
-import kotlin.math.cos
-import kotlin.math.sin
 import com.nico2.app.ui.components.AppBackground
 import com.nico2.app.ui.components.GlassCard
 import com.nico2.app.ui.components.GlassCapsule
@@ -101,6 +90,8 @@ import com.nico2.app.ui.components.GoldButton
 import com.nico2.app.ui.components.GlowDivider
 import com.nico2.app.ui.components.NicoPalette
 import com.nico2.app.ui.components.SectionHeader
+import com.nico2.app.ui.components.OrbVisualState
+import com.nico2.app.ui.components.PremiumLivingOrb
 
 internal enum class SettingsTab {
     Api,
@@ -867,26 +858,14 @@ internal fun VoiceScreen(
             else -> microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
-    val transition = rememberInfiniteTransition(label = "voice-orbit")
-    val orbitPhase by if (reduceAnimations) {
-        remember { mutableFloatStateOf(0f) }
-    } else {
-        transition.animateFloat(
-            initialValue = 0f,
-            targetValue = (2f * Math.PI).toFloat(),
-            animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 12_000),
-                repeatMode = RepeatMode.Restart,
-            ),
-            label = "voice-orbit-phase",
-        )
-    }
-
     AppBackground(Modifier.fillMaxSize()) {
-    Box(modifier = Modifier.fillMaxSize()) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF020304)),
+    ) {
         GlassCard(
             modifier = Modifier
-                .align(Alignment.TopCenter)
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 16.dp),
             contentPadding = 8.dp,
@@ -924,123 +903,74 @@ internal fun VoiceScreen(
             }
         }
 
-        Canvas(
+        Box(
             modifier = Modifier
-                .align(Alignment.Center)
-                .fillMaxWidth(0.76f)
-                .widthIn(max = 330.dp)
-                .aspectRatio(1f),
+                .weight(1f)
+                .fillMaxWidth(),
+            contentAlignment = Alignment.Center,
         ) {
-            val center = Offset(size.width / 2, size.height / 2)
-            val radius = size.minDimension * 0.31f
-            val breathing = if (reduceAnimations) 1f
-            else 0.985f + 0.015f * ((sin(orbitPhase) + 1f) / 2f)
-            val orbRadius = radius * breathing
-            drawCircle(
-                color = Gold.copy(alpha = if (reduceAnimations) 0.04f else 0.035f + breathing * 0.01f),
-                radius = radius * 1.48f,
-                center = center,
-            )
-            drawCircle(
-                color = MutedGold.copy(alpha = 0.13f),
-                radius = radius * 1.12f,
-                center = center,
-                style = Stroke(width = 1.dp.toPx()),
-            )
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color(0xFF4A3A1B),
-                        Color(0xFF1F1C16),
-                        Color(0xFF090909),
-                    ),
-                    center = Offset(center.x * 0.76f, center.y * 0.7f),
-                    radius = radius * 1.9f,
-                ),
-                radius = orbRadius,
-                center = center,
-            )
-            drawCircle(
-                color = Gold.copy(alpha = 0.78f),
-                radius = orbRadius,
-                center = center,
-                style = Stroke(width = 1.4.dp.toPx()),
-            )
-            drawCircle(
-                color = Color.White.copy(alpha = 0.2f),
-                radius = radius * 0.67f,
-                center = Offset(center.x - radius * 0.22f, center.y - radius * 0.22f),
-                style = Stroke(width = 1.dp.toPx()),
-            )
-            listOf(
-                Offset(center.x - radius * 1.13f, center.y - radius * 0.37f),
-                Offset(center.x + radius * 1.2f, center.y + radius * 0.2f),
-                Offset(center.x + radius * 0.25f, center.y - radius * 1.2f),
-                Offset(center.x - radius * 0.72f, center.y + radius * 0.98f),
-            ).forEachIndexed { index, point ->
-                drawCircle(
-                    color = Gold.copy(alpha = if (index % 2 == 0) 0.58f else 0.32f),
-                    radius = 1.6.dp.toPx(),
-                    center = point,
-                )
-            }
-            val arc = Path().apply {
-                moveTo(center.x - radius * 0.45f, center.y + radius * 0.73f)
-                cubicTo(
-                    center.x - radius * 0.05f,
-                    center.y + radius * 0.88f,
-                    center.x + radius * 0.32f,
-                    center.y + radius * 0.86f,
-                    center.x + radius * 0.57f,
-                    center.y + radius * 0.65f,
-                )
-            }
-            drawPath(
-                arc,
-                color = Gold.copy(alpha = 0.42f),
-                style = Stroke(width = 1.dp.toPx(), cap = StrokeCap.Round),
-            )
-            val orbitRadius = radius * 1.19f
-            drawCircle(
-                color = Gold.copy(alpha = 0.82f),
-                radius = 2.4.dp.toPx(),
-                center = Offset(
-                    center.x + cos(orbitPhase) * orbitRadius,
-                    center.y + sin(orbitPhase) * orbitRadius,
-                ),
-            )
-        }
-
-        if (isCameraActive && isLiveActive && liveState == GeminiLiveState.Active &&
-            lifecycleOwner != null
-        ) {
-            LiveCameraPreview(
-                lifecycleOwner = lifecycleOwner,
-                liveSession = liveSession,
+            Column(
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 88.dp, end = 16.dp)
-                    .size(width = 124.dp, height = 164.dp)
-                    .clip(RoundedCornerShape(18.dp))
-                    .border(1.dp, MutedGold, RoundedCornerShape(18.dp))
-                    .semantics {
-                        contentDescription = context.getString(R.string.voice_camera_preview)
+                    .fillMaxSize()
+                    .padding(horizontal = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                PremiumLivingOrb(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    state = if (
+                        liveState == GeminiLiveState.Connecting ||
+                        liveState == GeminiLiveState.Configuring
+                    ) {
+                        OrbVisualState.Connecting
+                    } else {
+                        OrbVisualState.Calm
                     },
-                onError = { error ->
-                    liveDetail = context.getString(
-                        when (error) {
-                            LiveCameraError.CameraUnavailable -> R.string.voice_camera_unavailable
-                            LiveCameraError.FrameSendFailed -> R.string.voice_camera_send_failed
+                    reducedMotion = reduceAnimations,
+                )
+                Text(
+                    text = "گفتگوی صوتی در این نسخه فعال نیست.",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 12.dp),
+                    color = SecondaryText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                )
+            }
+
+            if (isCameraActive && isLiveActive && liveState == GeminiLiveState.Active &&
+                lifecycleOwner != null
+            ) {
+                LiveCameraPreview(
+                    lifecycleOwner = lifecycleOwner,
+                    liveSession = liveSession,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 8.dp, end = 8.dp)
+                        .size(width = 124.dp, height = 164.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .border(1.dp, MutedGold, RoundedCornerShape(18.dp))
+                        .semantics {
+                            contentDescription = context.getString(R.string.voice_camera_preview)
                         },
-                    )
-                    isCameraActive = false
-                },
-            )
+                    onError = { error ->
+                        liveDetail = context.getString(
+                            when (error) {
+                                LiveCameraError.CameraUnavailable -> R.string.voice_camera_unavailable
+                                LiveCameraError.FrameSendFailed -> R.string.voice_camera_send_failed
+                            },
+                        )
+                        isCameraActive = false
+                    },
+                )
+            }
         }
 
         Column(
             modifier = Modifier
-                .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .padding(horizontal = 14.dp, vertical = 28.dp),
             horizontalAlignment = Alignment.CenterHorizontally,

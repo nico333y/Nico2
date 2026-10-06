@@ -28,8 +28,8 @@ internal fun buildGeminiLiveSetup(modelId: String, preferences: UserPreferences)
     JsonObject().apply {
         add("setup", JsonObject().apply {
             addProperty("model", "models/$modelId")
-            add("responseModalities", com.google.gson.JsonArray().apply { add("AUDIO") })
             add("generationConfig", JsonObject().apply {
+                add("responseModalities", com.google.gson.JsonArray().apply { add("AUDIO") })
                 add("speechConfig", JsonObject().apply {
                     add("voiceConfig", JsonObject().apply {
                         add("prebuiltVoiceConfig", JsonObject().apply {
