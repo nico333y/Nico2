@@ -43,6 +43,13 @@ private const val LIVE_CHAT_SETUP_TIMEOUT_MILLIS = 15_000L
 private const val LIVE_CHAT_RESPONSE_TIMEOUT_MILLIS = 60_000L
 private const val LIVE_ENDPOINT =
     "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+internal const val SUPPORTED_LANGUAGE_INSTRUCTION =
+    "The user understands only Persian and Turkish as spoken in Türkiye. Speak with the user " +
+        "only in Persian or Turkish. If a request is clearly in another language or its language " +
+        "is uncertain, do not act on it; politely ask the user in Persian or Turkish to repeat it. " +
+        "Do not reject Persian or Turkish sentences merely because they contain foreign names, " +
+        "brands, technical terms, or short foreign phrases. This is conversational guidance, not " +
+        "a technical input-language filter."
 
 internal enum class LiveFailureCategory {
     Network,
@@ -346,7 +353,12 @@ internal fun buildGeminiLiveSetup(
                 add("responseModalities", JsonArray().apply { add("AUDIO") })
             })
             if (includeInputAudioTranscription) {
-                add("inputAudioTranscription", JsonObject())
+                add("inputAudioTranscription", JsonObject().apply {
+                    add("languageCodes", JsonArray().apply {
+                        add("fa-IR")
+                        add("tr-TR")
+                    })
+                })
             }
             if (includeOutputAudioTranscription) {
                 add("outputAudioTranscription", JsonObject())
@@ -562,6 +574,45 @@ enum class GeminiLiveState {
     Closed,
 }
 
+enum class LiveTranscriptPhase {
+    Partial,
+    Final,
+    Interrupted,
+}
+
+data class LiveTranscriptUpdate(
+    val isUser: Boolean,
+    val text: String,
+    val phase: LiveTranscriptPhase,
+)
+
+internal class LiveTranscriptBuffer {
+    private val text = StringBuilder()
+
+    fun append(chunk: String): String {
+        text.append(chunk)
+        return text.toString()
+    }
+
+    fun finish(): String? = text.toString().trim().takeIf(String::isNotEmpty).also {
+        text.clear()
+    }
+
+    fun snapshot(): String = text.toString()
+}
+
+internal fun finalizeLiveTranscript(
+    buffer: LiveTranscriptBuffer,
+    isUser: Boolean,
+    interrupted: Boolean = false,
+): LiveTranscriptUpdate? = buffer.finish()?.let { text ->
+    LiveTranscriptUpdate(
+        isUser = isUser,
+        text = text,
+        phase = if (interrupted) LiveTranscriptPhase.Interrupted else LiveTranscriptPhase.Final,
+    )
+}
+
 class GeminiLiveSession(
     context: Context,
     private val apiKey: String,
@@ -570,6 +621,7 @@ class GeminiLiveSession(
     internal val sessionId: String = UUID.randomUUID().toString(),
     private val onState: (GeminiLiveState, String?) -> Unit,
     private val onTranscript: (isUser: Boolean, text: String) -> Unit,
+    private val onTranscriptUpdate: (LiveTranscriptUpdate) -> Unit = {},
 ) {
     private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -584,8 +636,8 @@ class GeminiLiveSession(
     private val isRecording = AtomicBoolean(false)
     private val handshake = LiveHandshakeTracker()
     private val inputMuted = AtomicBoolean(false)
-    private val inputTranscript = StringBuilder()
-    private val outputTranscript = StringBuilder()
+    private val inputTranscript = LiveTranscriptBuffer()
+    private val outputTranscript = LiveTranscriptBuffer()
     private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
     @Volatile private var webSocket: WebSocket? = null
@@ -740,6 +792,7 @@ class GeminiLiveSession(
                 modelId = model.id,
                 includeInputAudioTranscription = true,
                 includeOutputAudioTranscription = true,
+                systemInstruction = SUPPORTED_LANGUAGE_INSTRUCTION,
             ).toString()
             logEvent("setup_send_attempt", "bytes=${setup.toByteArray().size}")
             val sendAccepted = try {
@@ -1049,25 +1102,49 @@ class GeminiLiveSession(
             ?.get("text")
             ?.takeUnless { it.isJsonNull }
             ?.asString
-            ?.let(inputTranscript::append)
+            ?.takeIf(String::isNotEmpty)
+            ?.let { chunk ->
+                val text = inputTranscript.append(chunk)
+                reportTranscriptUpdate(LiveTranscriptUpdate(true, text, LiveTranscriptPhase.Partial))
+            }
         serverContent.getAsJsonObject("outputTranscription")
             ?.get("text")
             ?.takeUnless { it.isJsonNull }
             ?.asString
-            ?.let(outputTranscript::append)
+            ?.takeIf(String::isNotEmpty)
+            ?.let { chunk ->
+                val text = outputTranscript.append(chunk)
+                reportTranscriptUpdate(LiveTranscriptUpdate(false, text, LiveTranscriptPhase.Partial))
+            }
 
-        if (serverContent.get("turnComplete")?.asBoolean == true) {
-            inputTranscript.toString().trim().takeIf { it.isNotEmpty() }
-                ?.let { reportTranscript(isUser = true, it) }
-            outputTranscript.toString().trim().takeIf { it.isNotEmpty() }
-                ?.let { reportTranscript(isUser = false, it) }
-            inputTranscript.clear()
-            outputTranscript.clear()
+        val interrupted = serverContent.get("interrupted")?.asBoolean == true
+        val turnComplete = serverContent.get("turnComplete")?.asBoolean == true
+        if (turnComplete) {
+            finalizeLiveTranscript(inputTranscript, isUser = true)?.let { update ->
+                reportTranscriptUpdate(update)
+                reportTranscript(isUser = true, update.text)
+            }
+            finalizeLiveTranscript(
+                outputTranscript,
+                isUser = false,
+                interrupted = interrupted,
+            )?.let { update ->
+                reportTranscriptUpdate(update)
+                if (update.phase == LiveTranscriptPhase.Final) {
+                    reportTranscript(isUser = false, update.text)
+                }
+            }
             report(GeminiLiveState.Listening, null)
         }
-        if (serverContent.get("interrupted")?.asBoolean == true) {
-            outputTranscript.clear()
-            report(GeminiLiveState.Listening, null)
+        if (interrupted) {
+            if (!turnComplete) {
+                finalizeLiveTranscript(
+                    outputTranscript,
+                    isUser = false,
+                    interrupted = true,
+                )?.let(::reportTranscriptUpdate)
+                report(GeminiLiveState.Listening, null)
+            }
         }
     }
 
@@ -1264,6 +1341,10 @@ class GeminiLiveSession(
 
     private fun reportTranscript(isUser: Boolean, text: String) {
         mainHandler.post { onTranscript(isUser, text) }
+    }
+
+    private fun reportTranscriptUpdate(update: LiveTranscriptUpdate) {
+        mainHandler.post { onTranscriptUpdate(update) }
     }
 
     @Suppress("DEPRECATION")

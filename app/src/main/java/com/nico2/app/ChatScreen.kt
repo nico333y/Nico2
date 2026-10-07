@@ -174,6 +174,7 @@ private fun ChatContent() {
         initialValue = androidx.compose.material3.DrawerValue.Closed,
     )
     var currentPage by remember { mutableStateOf(AppPage.Chat) }
+    var voiceMiniPlayerVisible by remember { mutableStateOf(false) }
     var selectedSettingsTab by remember { mutableStateOf(SettingsTab.Api) }
     var reduceAnimations by remember { mutableStateOf(userPreferences.reduceAnimations) }
     var isIncognito by remember { mutableStateOf(false) }
@@ -390,7 +391,9 @@ private fun ChatContent() {
             pendingAttachments.firstOrNull()?.displayName.orEmpty()
         }
         val apiKey = geminiApiKey
-        if ((text.isNotEmpty() || pendingAttachments.isNotEmpty()) &&
+        if (voiceMiniPlayerVisible) {
+            showSnackbar(R.string.voice_text_input_unavailable)
+        } else if ((text.isNotEmpty() || pendingAttachments.isNotEmpty()) &&
             isStorageLoaded && storageError == null && !isGeneratingReply
         ) {
             if (apiKey.isNullOrBlank()) {
@@ -718,7 +721,8 @@ private fun ChatContent() {
             Scaffold(
                 modifier = Modifier
                     .fillMaxSize()
-                    .imePadding(),
+                    .imePadding()
+                    .padding(bottom = if (voiceMiniPlayerVisible) 128.dp else 0.dp),
                 containerColor = Color.Transparent,
                 snackbarHost = {
                     SnackbarHost(
@@ -837,16 +841,28 @@ private fun ChatContent() {
                         }
                     }
 
+                    if (voiceMiniPlayerVisible) {
+                        Text(
+                            stringResource(R.string.voice_text_input_unavailable),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp),
+                            color = TextSecondary,
+                            style = MaterialTheme.typography.labelSmall,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                     Composer(
                         draft = draft,
                         onDraftChange = { draft = it },
                         onSend = sendMessage,
                         onVoice = { currentPage = AppPage.Voice },
                         onAttach = { showAttachmentOptions = true },
-                        sendEnabled = draft.isNotBlank() &&
+                        enabled = !voiceMiniPlayerVisible,
+                        sendEnabled = !voiceMiniPlayerVisible && (draft.isNotBlank() &&
                             isStorageLoaded && storageError == null && !isGeneratingReply ||
                             pendingAttachments.isNotEmpty() &&
-                            isStorageLoaded && storageError == null && !isGeneratingReply,
+                            isStorageLoaded && storageError == null && !isGeneratingReply),
                         attachments = pendingAttachments,
                         onRemoveAttachment = { id ->
                             pendingAttachments.removeAll { it.id == id }
@@ -957,14 +973,7 @@ private fun ChatContent() {
                         },
                         onOpenLiveVoice = { currentPage = AppPage.Voice },
                     )
-                    AppPage.Voice -> VoiceScreen(
-                        onExit = { currentPage = AppPage.Chat },
-                        reduceAnimations = reduceAnimations,
-                        apiKey = geminiApiKey,
-                        availableModels = availableModels,
-                        preferences = userPreferences,
-                        onTranscript = saveLiveTranscript,
-                    )
+                    AppPage.Voice -> Unit
                     AppPage.Memory -> MemoryScreen(
                         store = localStore,
                         storageBytes = storageBytes,
@@ -1056,6 +1065,19 @@ private fun ChatContent() {
                     )
                 }
             }
+
+            VoiceScreen(
+                isFullScreen = currentPage == AppPage.Voice,
+                showMiniPlayer = currentPage == AppPage.Chat,
+                onMinimize = { currentPage = AppPage.Chat },
+                onRestore = { currentPage = AppPage.Voice },
+                onMiniPlayerVisibilityChange = { voiceMiniPlayerVisible = it },
+                reduceAnimations = reduceAnimations,
+                apiKey = geminiApiKey,
+                availableModels = availableModels,
+                preferences = userPreferences,
+                onTranscript = saveLiveTranscript,
+            )
         }
     }
 
@@ -1539,6 +1561,7 @@ private fun Composer(
     onSend: () -> Unit,
     onVoice: () -> Unit,
     onAttach: () -> Unit,
+    enabled: Boolean,
     sendEnabled: Boolean,
     attachments: List<LocalAttachment>,
     onRemoveAttachment: (String) -> Unit,
@@ -1595,6 +1618,7 @@ private fun Composer(
                     value = draft,
                     onValueChange = onDraftChange,
                     modifier = Modifier.weight(1f),
+                    enabled = enabled,
                     placeholder = {
                         Text(
                             text = stringResource(R.string.message_placeholder),
@@ -1633,6 +1657,7 @@ private fun Composer(
             GoldIconButton(
                 description = R.string.attachment_description,
                 onClick = onAttach,
+                enabled = enabled,
             ) {
                 UiIcon(IconKind.Attachment, R.string.attachment_description, tint = MutedGold)
             }
@@ -1677,7 +1702,7 @@ private fun preferredTextModel(models: List<GeminiModel>): GeminiModel? =
         ?: models.firstOrNull { it.supportsText }
 
 private fun buildAssistantInstruction(preferences: UserPreferences): String = buildString {
-    append("You are a helpful assistant. Reply in the same language as the user's latest message.")
+    append("You are a helpful assistant.")
     append(" Use a ${preferences.tone} tone and act as a ${preferences.role}.")
     append(" Keep answers ${preferences.answerLength} unless the task needs more detail.")
     append(" Set response creativity to ${preferences.creativity}.")
@@ -1686,6 +1711,8 @@ private fun buildAssistantInstruction(preferences: UserPreferences): String = bu
         .trim()
         .takeIf { it.isNotEmpty() }
         ?.let { append("\nAdditional user instruction: ").append(it) }
+    append("\n")
+    append(SUPPORTED_LANGUAGE_INSTRUCTION)
 }
 
 private fun importPickedAttachment(

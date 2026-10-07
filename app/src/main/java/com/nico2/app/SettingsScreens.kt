@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -51,6 +52,8 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -68,6 +71,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -755,7 +759,11 @@ private fun SettingCard(content: @Composable ColumnScope.() -> Unit) {
 
 @Composable
 internal fun VoiceScreen(
-    onExit: () -> Unit,
+    isFullScreen: Boolean,
+    showMiniPlayer: Boolean,
+    onMinimize: () -> Unit,
+    onRestore: () -> Unit,
+    onMiniPlayerVisibilityChange: (Boolean) -> Unit,
     reduceAnimations: Boolean,
     apiKey: String?,
     availableModels: List<GeminiModel>,
@@ -770,6 +778,9 @@ internal fun VoiceScreen(
     var liveDetail by remember { mutableStateOf<String?>(null) }
     var liveSession by remember { mutableStateOf<GeminiLiveSession?>(null) }
     var activeLiveSessionId by remember { mutableStateOf<String?>(null) }
+    var userCaption by remember { mutableStateOf<LiveTranscriptUpdate?>(null) }
+    var assistantCaption by remember { mutableStateOf<LiveTranscriptUpdate?>(null) }
+    var notificationUnavailable by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val lifecycleOwner = context.findLifecycleOwner()
     val liveModels = remember(availableModels) {
@@ -792,6 +803,22 @@ internal fun VoiceScreen(
                 details = context.getString(R.string.voice_permission_denied),
             )
         }
+    }
+    val beginMicrophone: () -> Unit = {
+        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            isLiveActive = true
+            liveDetail = null
+        } else {
+            microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        notificationUnavailable = !granted
+        beginMicrophone()
     }
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -834,12 +861,21 @@ internal fun VoiceScreen(
                         latestTranscriptCallback(isUser, text)
                     }
                 },
+                onTranscriptUpdate = { update ->
+                    if (activeLiveSessionId == sessionId) {
+                        if (update.isUser) userCaption = update else assistantCaption = update
+                    }
+                },
             )
         } else {
             null
         }
         activeLiveSessionId = session?.sessionId
         liveSession = session
+        if (session != null) {
+            userCaption = null
+            assistantCaption = null
+        }
         session?.start()
         onDispose {
             if (activeLiveSessionId == sessionId) activeLiveSessionId = null
@@ -853,8 +889,9 @@ internal fun VoiceScreen(
             if (event == Lifecycle.Event.ON_STOP && isLiveActive) {
                 isLiveActive = false
                 isCameraActive = false
+                VoiceSessionNotification.cancel(context)
                 liveDetail = context.getString(R.string.voice_stopped_background)
-            }
+        }
         }
         lifecycleOwner?.lifecycle?.addObserver(observer)
         onDispose { lifecycleOwner?.lifecycle?.removeObserver(observer) }
@@ -882,15 +919,74 @@ internal fun VoiceScreen(
                     details = context.getString(R.string.voice_live_unavailable),
                 )
             }
-            context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
-                PackageManager.PERMISSION_GRANTED -> {
-                isLiveActive = true
-                liveDetail = null
-            }
-            else -> microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED ->
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            else -> beginMicrophone()
         }
     }
-    AppBackground(Modifier.fillMaxSize()) {
+    SideEffect {
+        onMiniPlayerVisibilityChange(
+            showMiniPlayer && (isLiveActive || liveState == GeminiLiveState.Error),
+        )
+    }
+    val endLiveSession: () -> Unit = {
+        isLiveActive = false
+        isCameraActive = false
+        liveSession?.close()
+        VoiceSessionNotification.cancel(context)
+        liveDetail = null
+        liveState = GeminiLiveState.Closed
+        onMinimize()
+    }
+    val latestNotificationAction by rememberUpdatedState<(String) -> Unit> { action ->
+        when (action) {
+            VoiceSessionNotification.ACTION_OPEN -> onRestore()
+            VoiceSessionNotification.ACTION_TOGGLE_MIC -> if (isLiveActive) {
+                muted = !muted
+                liveSession?.setMuted(muted)
+            }
+            VoiceSessionNotification.ACTION_END -> endLiveSession()
+        }
+    }
+    DisposableEffect(activeLiveSessionId) {
+        val sessionId = activeLiveSessionId
+        if (sessionId != null) {
+            VoiceNotificationCommands.register(sessionId) { action ->
+                latestNotificationAction(action)
+            }
+        }
+        onDispose {
+            if (sessionId != null) VoiceNotificationCommands.unregister(sessionId)
+        }
+    }
+    val notificationStatus = when (liveState) {
+        GeminiLiveState.Connecting, GeminiLiveState.Closed ->
+            context.getString(R.string.voice_live_connecting)
+        GeminiLiveState.Configuring -> context.getString(R.string.voice_live_configuring)
+        GeminiLiveState.Ready, GeminiLiveState.Listening ->
+            context.getString(R.string.voice_live_ready)
+        GeminiLiveState.Responding -> context.getString(R.string.voice_live_responding)
+        GeminiLiveState.Error -> context.getString(R.string.voice_live_unavailable)
+    }
+    LaunchedEffect(isLiveActive, liveState, muted) {
+        if (isLiveActive) {
+            notificationUnavailable = !VoiceSessionNotification.show(
+                context = context,
+                status = notificationStatus,
+                muteLabel = context.getString(
+                    if (muted) R.string.voice_unmute else R.string.voice_mute,
+                ),
+                endLabel = context.getString(R.string.voice_end),
+            )
+        } else {
+            VoiceSessionNotification.cancel(context)
+        }
+    }
+    Box(Modifier.fillMaxSize()) {
+        if (isFullScreen) {
+            AppBackground(Modifier.fillMaxSize()) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -909,10 +1005,13 @@ internal fun VoiceScreen(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 VoiceControl(
-                    title = stringResource(R.string.back_to_chat),
-                    symbol = "‹",
+                    title = stringResource(R.string.voice_minimize),
+                    symbol = "⌄",
                     modifier = Modifier.size(48.dp),
-                    onClick = onExit,
+                    onClick = {
+                        if (isCameraActive) isCameraActive = false
+                        onMinimize()
+                    },
                 )
                 Column(
                     modifier = Modifier.weight(1f),
@@ -1008,6 +1107,38 @@ internal fun VoiceScreen(
             }
         }
 
+        if (userCaption?.text?.isNotBlank() == true ||
+            assistantCaption?.text?.isNotBlank() == true
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 156.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    stringResource(R.string.voice_captions_title),
+                    color = MutedGold,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                userCaption?.takeIf { it.text.isNotBlank() }?.let {
+                    VoiceCaptionCard(
+                        label = stringResource(R.string.voice_caption_user),
+                        update = it,
+                    )
+                }
+                assistantCaption?.takeIf { it.text.isNotBlank() }?.let {
+                    VoiceCaptionCard(
+                        label = stringResource(R.string.voice_caption_assistant),
+                        update = it,
+                    )
+                }
+            }
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1071,7 +1202,7 @@ internal fun VoiceScreen(
                     symbol = "×",
                     modifier = Modifier.weight(1f),
                     emphasized = true,
-                    onClick = onExit,
+                    onClick = endLiveSession,
                 )
                 VoiceControl(
                     title = stringResource(if (muted) R.string.voice_unmute else R.string.voice_mute),
@@ -1121,8 +1252,150 @@ internal fun VoiceScreen(
                 style = MaterialTheme.typography.labelSmall,
                 textAlign = TextAlign.Center,
             )
+            if (notificationUnavailable && isLiveActive) {
+                Text(
+                    stringResource(R.string.voice_notification_unavailable),
+                    color = SecondaryText,
+                    style = MaterialTheme.typography.labelSmall,
+                    textAlign = TextAlign.Center,
+                )
+            }
         }
     }
+            }
+        } else if (showMiniPlayer &&
+            (isLiveActive || liveState == GeminiLiveState.Error)
+        ) {
+            VoiceMiniPlayer(
+                modifier = Modifier.align(Alignment.BottomCenter),
+                state = liveState,
+                isMuted = muted,
+                notificationUnavailable = notificationUnavailable,
+                liveDetail = liveDetail,
+                onRestore = onRestore,
+                onMuteToggle = {
+                    muted = !muted
+                    liveSession?.setMuted(muted)
+                },
+                onEnd = endLiveSession,
+            )
+        }
+    }
+}
+
+@Composable
+private fun VoiceMiniPlayer(
+    modifier: Modifier = Modifier,
+    state: GeminiLiveState,
+    isMuted: Boolean,
+    notificationUnavailable: Boolean,
+    liveDetail: String?,
+    onRestore: () -> Unit,
+    onMuteToggle: () -> Unit,
+    onEnd: () -> Unit,
+) {
+    val status = when (state) {
+        GeminiLiveState.Connecting -> stringResource(R.string.voice_live_connecting)
+        GeminiLiveState.Configuring -> stringResource(R.string.voice_live_configuring)
+        GeminiLiveState.Ready, GeminiLiveState.Listening ->
+            stringResource(R.string.voice_live_ready)
+        GeminiLiveState.Responding -> stringResource(R.string.voice_live_responding)
+        GeminiLiveState.Error -> liveDetail ?: stringResource(R.string.voice_live_unavailable)
+        GeminiLiveState.Closed -> stringResource(R.string.voice_live_unavailable)
+    }
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        color = Color(0xFF191817),
+        shape = RoundedCornerShape(20.dp),
+        shadowElevation = 12.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    status,
+                    modifier = Modifier.weight(1f),
+                    color = if (state == GeminiLiveState.Error) Color(0xFFFFB4AB) else MainText,
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 2,
+                )
+                VoiceControl(
+                    title = stringResource(R.string.voice_restore),
+                    symbol = "↑",
+                    modifier = Modifier.width(72.dp),
+                    onClick = onRestore,
+                )
+                if (state != GeminiLiveState.Error) {
+                    VoiceControl(
+                        title = stringResource(
+                            if (isMuted) R.string.voice_unmute else R.string.voice_mute,
+                        ),
+                        symbol = if (isMuted) "○" else "◖",
+                        modifier = Modifier.width(72.dp),
+                        selected = isMuted,
+                        onClick = onMuteToggle,
+                    )
+                }
+                VoiceControl(
+                    title = stringResource(R.string.voice_end),
+                    symbol = "×",
+                    modifier = Modifier.width(72.dp),
+                    emphasized = true,
+                    onClick = onEnd,
+                )
+            }
+            if (notificationUnavailable) {
+                Text(
+                    stringResource(R.string.voice_notification_unavailable),
+                    color = SecondaryText,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun VoiceCaptionCard(
+        label: String,
+        update: LiveTranscriptUpdate,
+) {
+        val phaseLabel = when (update.phase) {
+            LiveTranscriptPhase.Partial -> stringResource(R.string.voice_caption_partial)
+            LiveTranscriptPhase.Final -> stringResource(R.string.voice_caption_final)
+            LiveTranscriptPhase.Interrupted -> stringResource(R.string.voice_caption_interrupted)
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color(0xB51E1D1B))
+                .border(1.dp, Outline, RoundedCornerShape(14.dp))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(label, color = MutedGold, style = MaterialTheme.typography.labelSmall)
+                Text(phaseLabel, color = SecondaryText, style = MaterialTheme.typography.labelSmall)
+            }
+            Text(
+                text = update.text,
+                color = MainText,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    textDirection = TextDirection.ContentOrRtl,
+                ),
+            )
         }
 }
 

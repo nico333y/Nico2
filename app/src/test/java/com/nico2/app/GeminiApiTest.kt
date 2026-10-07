@@ -274,7 +274,7 @@ class GeminiApiTest {
             modelId = "gemini-3.8-live",
             includeInputAudioTranscription = true,
             includeOutputAudioTranscription = true,
-            systemInstruction = "Be concise.",
+            systemInstruction = SUPPORTED_LANGUAGE_INSTRUCTION,
         ).getAsJsonObject("setup")
 
         assertEquals(
@@ -288,7 +288,13 @@ class GeminiApiTest {
         assertTrue(setup.has("inputAudioTranscription"))
         assertTrue(setup.has("outputAudioTranscription"))
         assertEquals(
-            "Be concise.",
+            listOf("fa-IR", "tr-TR"),
+            setup.getAsJsonObject("inputAudioTranscription")
+                .getAsJsonArray("languageCodes")
+                .map { it.asString },
+        )
+        assertEquals(
+            SUPPORTED_LANGUAGE_INSTRUCTION,
             setup.getAsJsonObject("systemInstruction")
                 .getAsJsonArray("parts")
                 .single()
@@ -296,6 +302,39 @@ class GeminiApiTest {
                 .get("text")
                 .asString,
         )
+    }
+
+    @Test
+    fun liveTranscriptBufferAppendsChunksAndFinalizesOnlyOnce() {
+        val buffer = LiveTranscriptBuffer()
+
+        assertEquals("Merhaba ", buffer.append("Merhaba "))
+        assertEquals("Merhaba dünya", buffer.append("dünya"))
+        assertEquals("Merhaba dünya", buffer.finish())
+        assertEquals(null, buffer.finish())
+        assertEquals("", buffer.snapshot())
+    }
+
+    @Test
+    fun liveTranscriptBufferDropsWhitespaceOnlyTurns() {
+        val buffer = LiveTranscriptBuffer()
+
+        buffer.append(" \n ")
+
+        assertEquals(null, buffer.finish())
+        assertEquals("", buffer.snapshot())
+    }
+
+    @Test
+    fun interruptedLiveTranscriptIsNotMarkedFinalOrPersistable() {
+        val buffer = LiveTranscriptBuffer()
+        buffer.append("Partial response")
+
+        val update = finalizeLiveTranscript(buffer, isUser = false, interrupted = true)
+
+        assertEquals("Partial response", update?.text)
+        assertEquals(LiveTranscriptPhase.Interrupted, update?.phase)
+        assertEquals(null, finalizeLiveTranscript(buffer, isUser = false))
     }
 
     @Test
