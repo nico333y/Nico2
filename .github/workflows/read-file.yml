@@ -1,0 +1,36 @@
+name: Read file to issue
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  read-file:
+    if: github.event.issue.user.login == github.repository_owner && startsWith(github.event.comment.body, '/read ')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read allowed file and comment it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMENT: ${{ github.event.comment.body }}
+        run: |
+          FILE_PATH="${COMMENT#/read }"
+          FILE_PATH="$(echo "$FILE_PATH" | xargs)"
+          case "$FILE_PATH" in
+            README.md|AGENTS.md|PERPLEXITY_MCP_SETUP.md|app/*|gradle/*|*.gradle|*.gradle.kts|*.properties) ;;
+            *) echo "Path not allowed: $FILE_PATH" >&2; exit 1 ;;
+          esac
+          [ -f "$FILE_PATH" ] || { echo "File not found: $FILE_PATH" >&2; exit 1; }
+          {
+            echo "### محتوای فایل: `$FILE_PATH`"
+            echo
+            echo '```'
+            cat "$FILE_PATH"
+            echo '```'
+          } > comment.md
+          gh issue comment "${{ github.event.issue.number }}" --repo "$GITHUB_REPOSITORY" --body-file comment.md
