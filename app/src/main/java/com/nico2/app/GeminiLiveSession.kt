@@ -39,6 +39,7 @@ private const val LIVE_ENDPOINT =
 
 internal fun buildGeminiLiveSetup(
     modelId: String,
+    includeInputAudioTranscription: Boolean = false,
     includeOutputAudioTranscription: Boolean = false,
     systemInstruction: String? = null,
 ): JsonObject =
@@ -48,7 +49,12 @@ internal fun buildGeminiLiveSetup(
                 "model",
                 if (modelId.startsWith("models/")) modelId else "models/$modelId",
             )
-            add("responseModalities", com.google.gson.JsonArray().apply { add("AUDIO") })
+            add("generationConfig", JsonObject().apply {
+                add("responseModalities", JsonArray().apply { add("AUDIO") })
+            })
+            if (includeInputAudioTranscription) {
+                add("inputAudioTranscription", JsonObject())
+            }
             if (includeOutputAudioTranscription) {
                 add("outputAudioTranscription", JsonObject())
             }
@@ -407,7 +413,14 @@ class GeminiLiveSession(
             report(GeminiLiveState.Configuring, null)
             if (setupSent) return
             setupSent = true
-            if (!webSocket.send(buildGeminiLiveSetup(model.id).toString())) {
+            if (!webSocket.send(
+                    buildGeminiLiveSetup(
+                        modelId = model.id,
+                        includeInputAudioTranscription = true,
+                        includeOutputAudioTranscription = true,
+                    ).toString(),
+                )
+            ) {
                 fail("ارسال پیکربندی Gemini Live انجام نشد.")
                 return
             }

@@ -15,24 +15,34 @@ class GeminiApiTest {
         assertEquals("models/gemini-3.8-live", setup.get("model").asString)
         assertEquals(2, setup.size())
         assertFalse(setup.has("thinkingConfig"))
-        assertFalse(setup.has("generationConfig"))
+        assertFalse(setup.has("responseModalities"))
         assertEquals(
             "AUDIO",
-            setup.getAsJsonArray("responseModalities")
+            setup.getAsJsonObject("generationConfig")
+                .getAsJsonArray("responseModalities")
                 .single()
                 .asString,
         )
     }
 
     @Test
-    fun liveChatSetupEnablesOutputTranscriptWithoutChangingAudioModality() {
+    fun liveChatSetupEnablesTranscriptsWithoutChangingAudioModality() {
         val setup = buildGeminiLiveSetup(
             modelId = "gemini-3.8-live",
+            includeInputAudioTranscription = true,
             includeOutputAudioTranscription = true,
             systemInstruction = "Be concise.",
         ).getAsJsonObject("setup")
 
-        assertEquals("AUDIO", setup.getAsJsonArray("responseModalities").single().asString)
+        assertEquals(
+            "AUDIO",
+            setup.getAsJsonObject("generationConfig")
+                .getAsJsonArray("responseModalities")
+                .single()
+                .asString,
+        )
+        assertFalse(setup.has("responseModalities"))
+        assertTrue(setup.has("inputAudioTranscription"))
         assertTrue(setup.has("outputAudioTranscription"))
         assertEquals(
             "Be concise.",

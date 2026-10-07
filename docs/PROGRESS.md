@@ -14,6 +14,7 @@
 - فهرست مدل به پنج مدل متنی درخواستی و `gemini-3.8-live` محدود شده است؛ شناسهٔ Live حتی در صورت نبودن `BidiGenerateContent` در متادیتای مدل برای اتصال Live قابل انتخاب است.
 - خطای handshake وب‌سوکت Live اکنون در صورت وجود، کد HTTP و شناسهٔ مدل را نشان می‌دهد تا خطای مدل/مجوز از خطای شبکه قابل تفکیک باشد.
 - پیام setup برای Live مطابق wire schema رسمی ساخته می‌شود؛ `responseModalities` داخل `generationConfig` قرار دارد و آزمون واحد شکل payload را بررسی می‌کند.
+- بررسی APK منتشرشده نشان داد تنظیم Live در نسخهٔ قبلی به‌اشتباه `responseModalities` را در ریشهٔ setup می‌فرستاد؛ آن را به `generationConfig.responseModalities` منتقل کردیم و برای گفتگوی زنده transcription ورودی و خروجی را فعال کردیم. تست رگرسیون شکل wire payload را بررسی می‌کند.
 - Live مراحل اتصال و تأیید setup را جدا نشان می‌دهد؛ برای اتصال ۲۵ ثانیه و setup پانزده ثانیه timeout وجود دارد تا صفحه در حالت اتصال نامحدود نماند.
 - کلید API با AES-GCM و کلید Android Keystore در فایل رمزگذاری‌شدهٔ فضای خصوصی اپ ذخیره می‌شود؛ کلید در سورس یا log قرار نمی‌گیرد. استفادهٔ مستقیم در اپ برای انتشار عمومی امن نیست.
 - Gemini Live از WebSocket، میکروفون و AudioTrack استفاده می‌کند؛ مدل‌های دارای `BidiGenerateContent` فهرست می‌شوند و پس از سهمیهٔ 429 به مدل Live دیگری تلاش می‌شود.
@@ -30,5 +31,6 @@
 - کنترل کاهش انیمیشن ترجیح کاربر را در SharedPreferences ذخیره می‌کند.
 - نسخه‌های build: Gradle `9.8.0`، Android Gradle Plugin `9.4.1` و Android SDK Platform `37.0`.
 - build و تست‌های unit محلی/API با موفقیت اجرا شدند: `./gradlew :app:testDebugUnitTest :app:assembleDebug`.
+- نسخهٔ تست پس از اصلاح اتصال Live با `versionCode` برابر ۲ و `versionName` برابر 1.0.1 ساخته شد؛ آزمون واقعی Gemini Live همچنان به کلید API و دستگاه Android نیاز دارد.
 - ارتباط زنده با Google، کلید واقعی، مجوز میکروفون، دوربین و صدای دستگاه در Codespace قابل آزمون end-to-end نبودند؛ نیازمند نصب APK روی گوشی و واردکردن کلید خود کاربر هستند.
 - فایل خروجی: `app/build/outputs/apk/debug/app-debug.apk`.
