@@ -44,6 +44,7 @@ internal enum class LiveFailureCategory {
     Model,
     ApiRequest,
     Server,
+    NoResponse,
     Device,
     Audio,
     Protocol,
@@ -86,7 +87,8 @@ internal fun classifyLiveFailure(
     }
     return when (stage) {
         LiveFailureStage.Connection -> LiveFailureCategory.Network
-        LiveFailureStage.Setup, LiveFailureStage.Session -> LiveFailureCategory.Server
+        LiveFailureStage.Setup -> LiveFailureCategory.NoResponse
+        LiveFailureStage.Session -> LiveFailureCategory.Server
         LiveFailureStage.Audio, LiveFailureStage.AudioStream -> LiveFailureCategory.Audio
         LiveFailureStage.Protocol -> LiveFailureCategory.Protocol
         LiveFailureStage.Unknown -> LiveFailureCategory.Unknown
@@ -128,6 +130,7 @@ internal fun contextualLiveFailure(
             LiveFailureCategory.Model -> R.string.live_error_category_model
             LiveFailureCategory.ApiRequest -> R.string.live_error_category_api_request
             LiveFailureCategory.Server -> R.string.live_error_category_server
+            LiveFailureCategory.NoResponse -> R.string.live_error_category_no_response
             LiveFailureCategory.Device -> R.string.live_error_category_device
             LiveFailureCategory.Audio -> R.string.live_error_category_audio
             LiveFailureCategory.Protocol -> R.string.live_error_category_protocol
@@ -568,7 +571,11 @@ class GeminiLiveSession(
                 stage = LiveFailureStage.Setup,
                 message = {
                     if (setupResponseCount == 0) {
-                        appContext.getString(R.string.live_setup_no_response, model.id)
+                        appContext.getString(
+                            R.string.live_setup_no_response,
+                            model.id,
+                            webSocket?.queueSize() ?: 0L,
+                        )
                     } else {
                         appContext.getString(
                             R.string.live_setup_unconfirmed_response,

@@ -1045,7 +1045,7 @@ internal fun VoiceScreen(
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 240.dp)
+                    .heightIn(max = 360.dp)
                     .verticalScroll(rememberScrollState())
                     .clip(RoundedCornerShape(16.dp))
                     .background(Color(0xFF211D15))

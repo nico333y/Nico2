@@ -27,6 +27,10 @@ class GeminiApiTest {
             classifyLiveFailure(503, LiveFailureStage.Setup),
         )
         assertEquals(
+            LiveFailureCategory.NoResponse,
+            classifyLiveFailure(null, LiveFailureStage.Setup),
+        )
+        assertEquals(
             LiveFailureCategory.Network,
             classifyLiveFailure(null, LiveFailureStage.Connection, "UnknownHostException"),
         )
@@ -59,6 +63,19 @@ class GeminiApiTest {
         assertTrue(diagnostic.contains("مدل: gemini-live"))
         assertTrue(diagnostic.contains("HTTP: 403"))
         assertTrue(diagnostic.contains("Permission denied"))
+    }
+
+    @Test
+    fun noSetupResponseIsNotMisreportedAsAnApiServerFailure() {
+        assertEquals(
+            LiveFailureCategory.NoResponse,
+            classifyLiveFailure(
+                httpStatus = null,
+                stage = LiveFailureStage.Setup,
+                errorType = null,
+                serverStatus = null,
+            ),
+        )
     }
 
     @Test

@@ -134,7 +134,7 @@
     <string name="live_text_attachments_unsupported">Live modeliyle metin sohbetinde dosya ekleri desteklenmez. Bir metin modeli seçin.</string>
     <string name="live_connection_timeout">%1$s modeline 25 saniye içinde bağlanılamadı. İnternet bağlantınızı kontrol edin.</string>
     <string name="live_setup_timeout">%1$s modeli için kurulum onayı alınmadı.</string>
-    <string name="live_setup_no_response">%1$s modeline WebSocket bağlandı ve setup mesajı gönderildi; ancak sunucudan 15 saniye içinde yanıt gelmedi. Mikrofon başlatılmadı. Hata ses başlatılmadan önce oluştu ve bu bağlantı sunucu nedenini döndürmedi.</string>
+    <string name="live_setup_no_response">%1$s modeli için WebSocket açıldı, ancak 15 saniye içinde Gemini\'dan setup yanıtı gelmedi; mikrofon başlamadı. WebSocket giden kuyruğu: %2$d bayt. Bu tek başına Gemini\'nin mi yanıt vermediğini yoksa ağ/VPN yolunun yanıtı mı engellediğini göstermez. Başka bir VPN veya ağ deneyin.</string>
     <string name="live_setup_unconfirmed_response">%1$s modeli %2$d WebSocket mesajı gönderdi, ancak hiçbiri setupComplete içermedi. Alınan alanlar: %3$s</string>
     <string name="voice_live_unavailable">Gemini Live modeli veya bağlantısı kullanılamıyor.</string>
     <string name="live_error_category_network">Ağ veya internet</string>
@@ -143,6 +143,7 @@
     <string name="live_error_category_model">Model veya model erişimi</string>
     <string name="live_error_category_api_request">API isteği veya yapılandırması</string>
     <string name="live_error_category_server">Gemini sunucusu veya servis yanıtı</string>
+    <string name="live_error_category_no_response">Yanıt yok; ağ/VPN veya Gemini servisi</string>
     <string name="live_error_category_device">Cihaz izni veya donanımı</string>
     <string name="live_error_category_audio">Cihaz mikrofonu veya ses</string>
     <string name="live_error_category_protocol">Protokol veya mesaj biçimi</string>

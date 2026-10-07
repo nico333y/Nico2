@@ -134,7 +134,7 @@
     <string name="live_text_attachments_unsupported">Attachments are not supported in text chat with the Live model. Choose a text model.</string>
     <string name="live_connection_timeout">Could not connect to model %1$s within 25 seconds. Check your internet connection.</string>
     <string name="live_setup_timeout">Model %1$s setup confirmation was not received.</string>
-    <string name="live_setup_no_response">The WebSocket connected to model %1$s and the setup message was sent, but the server sent no response within 15 seconds. The microphone has not started. The failure is before audio initialization; this connection returned no server cause.</string>
+    <string name="live_setup_no_response">The WebSocket opened for model %1$s, but no setup message arrived from Gemini within 15 seconds; the microphone has not started. WebSocket outgoing queue: %2$d bytes. This alone cannot tell whether Gemini stopped responding or the network/VPN path blocked the response. Try another VPN or network.</string>
     <string name="live_setup_unconfirmed_response">Model %1$s sent %2$d WebSocket message(s), but none contained setupComplete. Received fields: %3$s</string>
     <string name="voice_live_unavailable">Gemini Live model or connection is unavailable.</string>
     <string name="live_error_category_network">Network or internet</string>
@@ -143,6 +143,7 @@
     <string name="live_error_category_model">Model or model access</string>
     <string name="live_error_category_api_request">API request or configuration</string>
     <string name="live_error_category_server">Gemini server or service response</string>
+    <string name="live_error_category_no_response">No response; network/VPN or Gemini service</string>
     <string name="live_error_category_device">Device permission or hardware</string>
     <string name="live_error_category_audio">Device microphone or audio</string>
     <string name="live_error_category_protocol">Protocol or message format</string>
