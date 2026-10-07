@@ -9,6 +9,59 @@ import org.junit.Test
 
 class GeminiApiTest {
     @Test
+    fun classifiesLiveFailuresByHttpStatusAndConnectionStage() {
+        assertEquals(
+            LiveFailureCategory.ApiKey,
+            classifyLiveFailure(403, LiveFailureStage.Connection),
+        )
+        assertEquals(
+            LiveFailureCategory.Quota,
+            classifyLiveFailure(429, LiveFailureStage.Setup),
+        )
+        assertEquals(
+            LiveFailureCategory.Model,
+            classifyLiveFailure(404, LiveFailureStage.Setup),
+        )
+        assertEquals(
+            LiveFailureCategory.Server,
+            classifyLiveFailure(503, LiveFailureStage.Setup),
+        )
+        assertEquals(
+            LiveFailureCategory.Network,
+            classifyLiveFailure(null, LiveFailureStage.Connection, "UnknownHostException"),
+        )
+        assertEquals(
+            LiveFailureCategory.Audio,
+            classifyLiveFailure(null, LiveFailureStage.Audio, "IllegalStateException"),
+        )
+        assertEquals(
+            LiveFailureCategory.Quota,
+            classifyLiveFailure(
+                null,
+                LiveFailureStage.Setup,
+                serverStatus = "RESOURCE_EXHAUSTED",
+            ),
+        )
+    }
+
+    @Test
+    fun liveFailureDiagnosticIncludesCategoryStageModelAndHttpStatus() {
+        val diagnostic = formatLiveFailureDiagnostic(
+            category = "API key",
+            stage = "WebSocket",
+            modelId = "gemini-live",
+            httpStatus = 403,
+            details = "Permission denied",
+        )
+
+        assertTrue(diagnostic.contains("تشخیص: API key"))
+        assertTrue(diagnostic.contains("مرحله: WebSocket"))
+        assertTrue(diagnostic.contains("مدل: gemini-live"))
+        assertTrue(diagnostic.contains("HTTP: 403"))
+        assertTrue(diagnostic.contains("Permission denied"))
+    }
+
+    @Test
     fun liveSetupUsesLiveApiResponseModalitiesShape() {
         val setup = buildGeminiLiveSetup("gemini-3.8-live").getAsJsonObject("setup")
 

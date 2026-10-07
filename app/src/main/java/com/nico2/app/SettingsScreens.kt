@@ -783,7 +783,13 @@ internal fun VoiceScreen(
             liveDetail = null
         } else {
             liveState = GeminiLiveState.Error
-            liveDetail = context.getString(R.string.voice_permission_denied)
+            liveDetail = contextualLiveFailure(
+                context = context,
+                category = LiveFailureCategory.Audio,
+                stage = LiveFailureStage.Audio,
+                modelId = liveModels.firstOrNull()?.id,
+                details = context.getString(R.string.voice_permission_denied),
+            )
         }
     }
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
@@ -793,7 +799,13 @@ internal fun VoiceScreen(
             isCameraActive = true
             liveDetail = null
         } else {
-            liveDetail = context.getString(R.string.voice_camera_permission_denied)
+            liveDetail = contextualLiveFailure(
+                context = context,
+                category = LiveFailureCategory.Device,
+                stage = LiveFailureStage.Audio,
+                modelId = liveModels.firstOrNull()?.id,
+                details = context.getString(R.string.voice_camera_permission_denied),
+            )
         }
     }
 
@@ -845,11 +857,23 @@ internal fun VoiceScreen(
         when {
             apiKey.isNullOrBlank() -> {
                 liveState = GeminiLiveState.Error
-                liveDetail = context.getString(R.string.api_key_missing)
+                liveDetail = contextualLiveFailure(
+                    context = context,
+                    category = LiveFailureCategory.ApiKey,
+                    stage = LiveFailureStage.Connection,
+                    modelId = liveModels.firstOrNull()?.id,
+                    details = context.getString(R.string.api_key_missing),
+                )
             }
             liveModels.isEmpty() -> {
                 liveState = GeminiLiveState.Error
-                liveDetail = context.getString(R.string.voice_live_unavailable)
+                liveDetail = contextualLiveFailure(
+                    context = context,
+                    category = LiveFailureCategory.Model,
+                    stage = LiveFailureStage.Setup,
+                    modelId = null,
+                    details = context.getString(R.string.voice_live_unavailable),
+                )
             }
             context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
                 PackageManager.PERMISSION_GRANTED -> {
@@ -950,11 +974,26 @@ internal fun VoiceScreen(
                             contentDescription = context.getString(R.string.voice_camera_preview)
                         },
                     onError = { error ->
-                        liveDetail = context.getString(
+                        val category = when (error) {
+                            LiveCameraError.CameraUnavailable -> LiveFailureCategory.Device
+                            LiveCameraError.FrameSendFailed -> LiveFailureCategory.Server
+                        }
+                        val stage = when (error) {
+                            LiveCameraError.CameraUnavailable -> LiveFailureStage.Audio
+                            LiveCameraError.FrameSendFailed -> LiveFailureStage.Session
+                        }
+                        val detail = context.getString(
                             when (error) {
                                 LiveCameraError.CameraUnavailable -> R.string.voice_camera_unavailable
                                 LiveCameraError.FrameSendFailed -> R.string.voice_camera_send_failed
                             },
+                        )
+                        liveDetail = contextualLiveFailure(
+                            context = context,
+                            category = category,
+                            stage = stage,
+                            modelId = liveModels.firstOrNull()?.id,
+                            details = detail,
                         )
                         isCameraActive = false
                     },
@@ -1006,7 +1045,7 @@ internal fun VoiceScreen(
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 128.dp)
+                    .heightIn(max = 240.dp)
                     .verticalScroll(rememberScrollState())
                     .clip(RoundedCornerShape(16.dp))
                     .background(Color(0xFF211D15))

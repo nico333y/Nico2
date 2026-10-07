@@ -37,6 +37,137 @@ private const val LIVE_CHAT_RESPONSE_TIMEOUT_MILLIS = 60_000L
 private const val LIVE_ENDPOINT =
     "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
 
+internal enum class LiveFailureCategory {
+    Network,
+    ApiKey,
+    Quota,
+    Model,
+    ApiRequest,
+    Server,
+    Device,
+    Audio,
+    Protocol,
+    Unknown,
+}
+
+internal enum class LiveFailureStage {
+    Connection,
+    Setup,
+    Audio,
+    AudioStream,
+    Session,
+    Protocol,
+    Unknown,
+}
+
+internal fun classifyLiveFailure(
+    httpStatus: Int?,
+    stage: LiveFailureStage,
+    errorType: String? = null,
+    serverStatus: String? = null,
+): LiveFailureCategory {
+    when (serverStatus.orEmpty().uppercase()) {
+        "UNAUTHENTICATED", "PERMISSION_DENIED" -> return LiveFailureCategory.ApiKey
+        "RESOURCE_EXHAUSTED" -> return LiveFailureCategory.Quota
+        "NOT_FOUND" -> return LiveFailureCategory.Model
+        "UNAVAILABLE", "INTERNAL" -> return LiveFailureCategory.Server
+        "INVALID_ARGUMENT" -> return LiveFailureCategory.ApiRequest
+    }
+    when (httpStatus) {
+        401, 403 -> return LiveFailureCategory.ApiKey
+        404 -> return LiveFailureCategory.Model
+        429 -> return LiveFailureCategory.Quota
+        400 -> return LiveFailureCategory.ApiRequest
+        in 500..599 -> return LiveFailureCategory.Server
+        in 400..499 -> return LiveFailureCategory.ApiRequest
+    }
+    if (errorType.orEmpty().lowercase() in NETWORK_ERROR_TYPES) {
+        return LiveFailureCategory.Network
+    }
+    return when (stage) {
+        LiveFailureStage.Connection -> LiveFailureCategory.Network
+        LiveFailureStage.Setup, LiveFailureStage.Session -> LiveFailureCategory.Server
+        LiveFailureStage.Audio, LiveFailureStage.AudioStream -> LiveFailureCategory.Audio
+        LiveFailureStage.Protocol -> LiveFailureCategory.Protocol
+        LiveFailureStage.Unknown -> LiveFailureCategory.Unknown
+    }
+}
+
+internal fun formatLiveFailureDiagnostic(
+    category: String,
+    stage: String,
+    modelId: String,
+    details: String,
+    httpStatus: Int? = null,
+    diagnosisLabel: String = "تشخیص",
+    stageLabel: String = "مرحله",
+    modelLabel: String = "مدل",
+    httpLabel: String = "HTTP",
+    detailsLabel: String = "جزئیات",
+): String = buildString {
+    append(diagnosisLabel).append(": ").append(category)
+    append("\n").append(stageLabel).append(": ").append(stage)
+    append("\n").append(modelLabel).append(": ").append(modelId)
+    httpStatus?.let { append("\n").append(httpLabel).append(": ").append(it) }
+    if (details.isNotBlank()) append("\n").append(detailsLabel).append(": ").append(details)
+}
+
+internal fun contextualLiveFailure(
+    context: Context,
+    category: LiveFailureCategory,
+    stage: LiveFailureStage,
+    modelId: String?,
+    details: String,
+    httpStatus: Int? = null,
+): String {
+    val categoryText = context.getString(
+        when (category) {
+            LiveFailureCategory.Network -> R.string.live_error_category_network
+            LiveFailureCategory.ApiKey -> R.string.live_error_category_api_key
+            LiveFailureCategory.Quota -> R.string.live_error_category_quota
+            LiveFailureCategory.Model -> R.string.live_error_category_model
+            LiveFailureCategory.ApiRequest -> R.string.live_error_category_api_request
+            LiveFailureCategory.Server -> R.string.live_error_category_server
+            LiveFailureCategory.Device -> R.string.live_error_category_device
+            LiveFailureCategory.Audio -> R.string.live_error_category_audio
+            LiveFailureCategory.Protocol -> R.string.live_error_category_protocol
+            LiveFailureCategory.Unknown -> R.string.live_error_category_unknown
+        },
+    )
+    val stageText = context.getString(
+        when (stage) {
+            LiveFailureStage.Connection -> R.string.live_error_stage_connection
+            LiveFailureStage.Setup -> R.string.live_error_stage_setup
+            LiveFailureStage.Audio -> R.string.live_error_stage_audio
+            LiveFailureStage.AudioStream -> R.string.live_error_stage_audio_stream
+            LiveFailureStage.Session -> R.string.live_error_stage_session
+            LiveFailureStage.Protocol -> R.string.live_error_stage_protocol
+            LiveFailureStage.Unknown -> R.string.live_error_stage_unknown
+        },
+    )
+    return formatLiveFailureDiagnostic(
+        category = categoryText,
+        stage = stageText,
+        modelId = modelId ?: context.getString(R.string.live_error_model_unknown),
+        details = details,
+        httpStatus = httpStatus,
+        diagnosisLabel = context.getString(R.string.live_error_diagnosis_label),
+        stageLabel = context.getString(R.string.live_error_stage_label),
+        modelLabel = context.getString(R.string.live_error_model_label),
+        httpLabel = context.getString(R.string.live_error_http_label),
+        detailsLabel = context.getString(R.string.live_error_details_label),
+    )
+}
+
+private val NETWORK_ERROR_TYPES = setOf(
+    "connectexception",
+    "ioexception",
+    "unknownhostexception",
+    "noroutetohostexception",
+    "sockettimeoutexception",
+    "sslhandshakeexception",
+)
+
 internal fun buildGeminiLiveSetup(
     modelId: String,
     includeInputAudioTranscription: Boolean = false,
@@ -329,7 +460,10 @@ class GeminiLiveSession(
             val target = audioManager.availableCommunicationDevices
                 .firstOrNull { it.type == targetType }
             if (target == null || !audioManager.setCommunicationDevice(target)) {
-                report(GeminiLiveState.Error, "تغییر مسیر خروجی صدا انجام نشد.")
+                fail(
+                    "تغییر مسیر خروجی صدا انجام نشد.",
+                    stage = LiveFailureStage.Audio,
+                )
                 return false
             }
         } else {
@@ -391,6 +525,7 @@ class GeminiLiveSession(
         scheduleStageTimeout(
             modelIndex = currentModelIndex,
             timeoutMillis = CONNECT_TIMEOUT_MILLIS,
+            stage = LiveFailureStage.Connection,
             message = { appContext.getString(R.string.live_connection_timeout, model.id) },
         )
         val encodedKey = URLEncoder.encode(apiKey, Charsets.UTF_8.name())
@@ -421,12 +556,16 @@ class GeminiLiveSession(
                     ).toString(),
                 )
             ) {
-                fail("ارسال پیکربندی Gemini Live انجام نشد.")
+                fail(
+                    "ارسال پیکربندی Gemini Live انجام نشد.",
+                    stage = LiveFailureStage.Protocol,
+                )
                 return
             }
             scheduleStageTimeout(
                 modelIndex = modelIndex,
                 timeoutMillis = SETUP_TIMEOUT_MILLIS,
+                stage = LiveFailureStage.Setup,
                 message = {
                     if (setupResponseCount == 0) {
                         appContext.getString(R.string.live_setup_no_response, model.id)
@@ -447,11 +586,17 @@ class GeminiLiveSession(
             val parsed = try {
                 JsonParser.parseString(text)
             } catch (error: JsonParseException) {
-                fail("پاسخ JSON از Gemini Live قابل پردازش نبود (${error.javaClass.simpleName}).")
+                fail(
+                    "پاسخ JSON از Gemini Live قابل پردازش نبود (${error.javaClass.simpleName}).",
+                    stage = LiveFailureStage.Protocol,
+                )
                 return
             }
             if (!parsed.isJsonObject) {
-                fail("پاسخ Gemini Live از نوع JSON object نبود.")
+                fail(
+                    "پاسخ Gemini Live از نوع JSON object نبود.",
+                    stage = LiveFailureStage.Protocol,
+                )
                 return
             }
             val message = parsed.asJsonObject
@@ -461,7 +606,22 @@ class GeminiLiveSession(
                 ?: message.get("error")?.takeUnless { it.isJsonNull }
             if (serverError != null) {
                 val details = sanitizeLiveDiagnostic(serverError.toString(), apiKey)
-                fail("Gemini Live setup رد شد: $details")
+                val serverErrorObject = serverError.takeIf { it.isJsonObject }?.asJsonObject
+                val serverStatus = serverErrorObject
+                    ?.get("status")
+                    ?.takeUnless { it.isJsonNull }
+                    ?.asString
+                val serverCode = serverErrorObject
+                    ?.get("code")
+                    ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }
+                    ?.asInt
+                    ?.takeIf { it in 400..599 }
+                fail(
+                    "Gemini Live setup رد شد: $details",
+                    stage = LiveFailureStage.Setup,
+                    httpStatus = serverCode,
+                    serverStatus = serverStatus,
+                )
                 return
             }
 
@@ -490,7 +650,16 @@ class GeminiLiveSession(
             if (isClosed.get() || hasFailed.get() || modelIndex != currentModelIndex) return
             clearStageTimeout()
             stopAudio()
-            fail(formatHandshakeFailure(model, t, response))
+            fail(
+                formatHandshakeFailure(model, t, response),
+                stage = if (setupConfirmed) {
+                    LiveFailureStage.Session
+                } else {
+                    LiveFailureStage.Connection
+                },
+                httpStatus = response?.code,
+                errorType = t.javaClass.simpleName,
+            )
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
@@ -500,7 +669,14 @@ class GeminiLiveSession(
                 val safeReason = sanitizeLiveDiagnostic(reason, apiKey)
                 val closeDetail = "Gemini Live بستن اتصال را اعلام کرد: code=$code" +
                     if (safeReason.isBlank()) "" else "، reason=$safeReason"
-                fail(closeDetail)
+                fail(
+                    closeDetail,
+                    stage = if (setupConfirmed) {
+                        LiveFailureStage.Session
+                    } else {
+                        LiveFailureStage.Setup
+                    },
+                )
             }
         }
     }
@@ -508,6 +684,7 @@ class GeminiLiveSession(
     private fun scheduleStageTimeout(
         modelIndex: Int,
         timeoutMillis: Long,
+        stage: LiveFailureStage,
         message: () -> String,
     ) {
         clearStageTimeout()
@@ -515,7 +692,7 @@ class GeminiLiveSession(
             if (!isClosed.get() && !hasFailed.get() &&
                 currentModelIndex == modelIndex && !isRecording.get()
             ) {
-                fail(message())
+                fail(message(), stage = stage)
             }
         }
         stageTimeout = timeout
@@ -691,11 +868,17 @@ class GeminiLiveSession(
                             })
                         }
                         if (webSocket?.send(audioInput.toString()) != true) {
-                            fail("ارسال صدای میکروفون به Gemini Live ناموفق بود.")
+                            fail(
+                                "ارسال صدای میکروفون به Gemini Live ناموفق بود.",
+                                stage = LiveFailureStage.AudioStream,
+                            )
                             break
                         }
                     } else if (count < 0 && isRecording.get()) {
-                        fail("خواندن صدای میکروفون ناموفق بود.")
+                        fail(
+                            "خواندن صدای میکروفون ناموفق بود (کد AudioRecord=$count).",
+                            stage = LiveFailureStage.Audio,
+                        )
                         break
                     }
                 }
@@ -703,10 +886,16 @@ class GeminiLiveSession(
             return true
         } catch (error: SecurityException) {
             stopAudio()
-            fail("اجازهٔ دسترسی به میکروفون داده نشد.")
+            fail(
+                "اجازهٔ دسترسی به میکروفون داده نشد.",
+                stage = LiveFailureStage.Audio,
+            )
         } catch (error: Exception) {
             stopAudio()
-            fail(error.message ?: "راه‌اندازی صدای زنده ناموفق بود.")
+            fail(
+                "${error.javaClass.simpleName}: ${error.message ?: "راه‌اندازی صدای زنده ناموفق بود."}",
+                stage = LiveFailureStage.Audio,
+            )
         }
         return false
     }
@@ -737,13 +926,30 @@ class GeminiLiveSession(
         }
     }
 
-    private fun fail(message: String) {
+    private fun fail(
+        message: String,
+        stage: LiveFailureStage = LiveFailureStage.Unknown,
+        httpStatus: Int? = null,
+        errorType: String? = null,
+        serverStatus: String? = null,
+    ) {
         if (!hasFailed.compareAndSet(false, true)) return
         clearStageTimeout()
         stopAudio()
         restoreAudioRouting()
         webSocket?.cancel()
-        report(GeminiLiveState.Error, message)
+        val category = classifyLiveFailure(httpStatus, stage, errorType, serverStatus)
+        report(
+            GeminiLiveState.Error,
+            contextualLiveFailure(
+                context = appContext,
+                category = category,
+                stage = stage,
+                modelId = liveModel?.id,
+                details = sanitizeLiveDiagnostic(message, apiKey),
+                httpStatus = httpStatus,
+            ),
+        )
     }
 
     private fun report(state: GeminiLiveState, detail: String?) {

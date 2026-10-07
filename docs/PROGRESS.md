@@ -32,5 +32,6 @@
 - نسخه‌های build: Gradle `9.8.0`، Android Gradle Plugin `9.4.1` و Android SDK Platform `37.0`.
 - build و تست‌های unit محلی/API با موفقیت اجرا شدند: `./gradlew :app:testDebugUnitTest :app:assembleDebug`.
 - نسخهٔ تست پس از اصلاح اتصال Live با `versionCode` برابر ۲ و `versionName` برابر 1.0.1 ساخته شد؛ آزمون واقعی Gemini Live همچنان به کلید API و دستگاه Android نیاز دارد.
+- نسخهٔ 1.0.2 با `versionCode` برابر ۳ تشخیص صوتی کامل‌تر دارد: علت‌ها به شبکه، کلید/مجوز، سهمیه، مدل، درخواست API، سرور، دستگاه، صوت یا پروتکل تقسیم می‌شوند و مرحله، مدل و جزئیات امن‌شدهٔ سرور در کادر قابل پیمایش نمایش داده می‌شوند.
 - ارتباط زنده با Google، کلید واقعی، مجوز میکروفون، دوربین و صدای دستگاه در Codespace قابل آزمون end-to-end نبودند؛ نیازمند نصب APK روی گوشی و واردکردن کلید خود کاربر هستند.
 - فایل خروجی: `app/build/outputs/apk/debug/app-debug.apk`.
