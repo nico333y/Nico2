@@ -157,6 +157,7 @@
     <string name="live_error_stage_unknown">Bilinmeyen aşama</string>
     <string name="live_error_model_unknown">Bilinmiyor</string>
     <string name="live_error_diagnosis_label">Teşhis</string>
+    <string name="live_error_code_label">Hata kodu</string>
     <string name="live_error_stage_label">Aşama</string>
     <string name="live_error_model_label">Model</string>
     <string name="live_error_http_label">HTTP durumu</string>

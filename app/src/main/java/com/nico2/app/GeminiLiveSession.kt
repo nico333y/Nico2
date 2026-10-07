@@ -95,18 +95,44 @@ internal fun classifyLiveFailure(
     }
 }
 
+internal fun liveFailureDiagnosticCode(
+    category: LiveFailureCategory,
+    stage: LiveFailureStage,
+    httpStatus: Int?,
+): String {
+    if (httpStatus != null) return "HTTP_$httpStatus"
+    return when {
+        category == LiveFailureCategory.NoResponse &&
+            stage == LiveFailureStage.Setup -> "LIVE_SETUP_NO_RESPONSE"
+        category == LiveFailureCategory.NoResponse -> "LIVE_NO_RESPONSE"
+        category == LiveFailureCategory.Network -> "LIVE_NETWORK_CONNECTION"
+        category == LiveFailureCategory.ApiKey -> "LIVE_API_KEY_OR_PERMISSION"
+        category == LiveFailureCategory.Quota -> "LIVE_API_QUOTA"
+        category == LiveFailureCategory.Model -> "LIVE_MODEL_OR_ACCESS"
+        category == LiveFailureCategory.ApiRequest -> "LIVE_INVALID_API_REQUEST"
+        category == LiveFailureCategory.Server -> "LIVE_SERVER_ERROR"
+        category == LiveFailureCategory.Device -> "LIVE_DEVICE_ERROR"
+        category == LiveFailureCategory.Audio -> "LIVE_AUDIO_ERROR"
+        category == LiveFailureCategory.Protocol -> "LIVE_PROTOCOL_ERROR"
+        else -> "LIVE_UNKNOWN_ERROR"
+    }
+}
+
 internal fun formatLiveFailureDiagnostic(
     category: String,
     stage: String,
     modelId: String,
     details: String,
     httpStatus: Int? = null,
+    diagnosticCode: String = "LIVE_UNKNOWN_ERROR",
     diagnosisLabel: String = "تشخیص",
     stageLabel: String = "مرحله",
     modelLabel: String = "مدل",
     httpLabel: String = "HTTP",
+    codeLabel: String = "کد خطا",
     detailsLabel: String = "جزئیات",
 ): String = buildString {
+    append(codeLabel).append(": ").append(diagnosticCode)
     append(diagnosisLabel).append(": ").append(category)
     append("\n").append(stageLabel).append(": ").append(stage)
     append("\n").append(modelLabel).append(": ").append(modelId)
@@ -154,10 +180,12 @@ internal fun contextualLiveFailure(
         modelId = modelId ?: context.getString(R.string.live_error_model_unknown),
         details = details,
         httpStatus = httpStatus,
+        diagnosticCode = liveFailureDiagnosticCode(category, stage, httpStatus),
         diagnosisLabel = context.getString(R.string.live_error_diagnosis_label),
         stageLabel = context.getString(R.string.live_error_stage_label),
         modelLabel = context.getString(R.string.live_error_model_label),
         httpLabel = context.getString(R.string.live_error_http_label),
+        codeLabel = context.getString(R.string.live_error_code_label),
         detailsLabel = context.getString(R.string.live_error_details_label),
     )
 }

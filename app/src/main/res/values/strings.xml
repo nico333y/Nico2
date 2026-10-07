@@ -157,6 +157,7 @@
     <string name="live_error_stage_unknown">مرحلهٔ نامشخص</string>
     <string name="live_error_model_unknown">نامشخص</string>
     <string name="live_error_diagnosis_label">تشخیص</string>
+    <string name="live_error_code_label">کد خطا</string>
     <string name="live_error_stage_label">مرحله</string>
     <string name="live_error_model_label">مدل</string>
     <string name="live_error_http_label">کد HTTP</string>

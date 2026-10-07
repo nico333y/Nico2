@@ -56,8 +56,10 @@ class GeminiApiTest {
             modelId = "gemini-live",
             httpStatus = 403,
             details = "Permission denied",
+            diagnosticCode = "HTTP_403",
         )
 
+        assertTrue(diagnostic.contains("کد خطا: HTTP_403"))
         assertTrue(diagnostic.contains("تشخیص: API key"))
         assertTrue(diagnostic.contains("مرحله: WebSocket"))
         assertTrue(diagnostic.contains("مدل: gemini-live"))
@@ -67,13 +69,38 @@ class GeminiApiTest {
 
     @Test
     fun noSetupResponseIsNotMisreportedAsAnApiServerFailure() {
+        val category = classifyLiveFailure(
+            httpStatus = null,
+            stage = LiveFailureStage.Setup,
+            errorType = null,
+            serverStatus = null,
+        )
         assertEquals(
             LiveFailureCategory.NoResponse,
-            classifyLiveFailure(
+            category,
+        )
+        assertEquals(
+            "LIVE_SETUP_NO_RESPONSE",
+            liveFailureDiagnosticCode(category, LiveFailureStage.Setup, httpStatus = null),
+        )
+    }
+
+    @Test
+    fun liveFailureDiagnosticCodePreservesHttpStatusAndClassifiesAudio() {
+        assertEquals(
+            "HTTP_403",
+            liveFailureDiagnosticCode(
+                LiveFailureCategory.ApiKey,
+                LiveFailureStage.Connection,
+                httpStatus = 403,
+            ),
+        )
+        assertEquals(
+            "LIVE_AUDIO_ERROR",
+            liveFailureDiagnosticCode(
+                LiveFailureCategory.Audio,
+                LiveFailureStage.Audio,
                 httpStatus = null,
-                stage = LiveFailureStage.Setup,
-                errorType = null,
-                serverStatus = null,
             ),
         )
     }

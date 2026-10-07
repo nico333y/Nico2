@@ -157,6 +157,7 @@
     <string name="live_error_stage_unknown">Unknown stage</string>
     <string name="live_error_model_unknown">Unknown</string>
     <string name="live_error_diagnosis_label">Diagnosis</string>
+    <string name="live_error_code_label">Error code</string>
     <string name="live_error_stage_label">Stage</string>
     <string name="live_error_model_label">Model</string>
     <string name="live_error_http_label">HTTP status</string>
