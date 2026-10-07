@@ -769,6 +769,7 @@ internal fun VoiceScreen(
     var liveState by remember { mutableStateOf(GeminiLiveState.Closed) }
     var liveDetail by remember { mutableStateOf<String?>(null) }
     var liveSession by remember { mutableStateOf<GeminiLiveSession?>(null) }
+    var activeLiveSessionId by remember { mutableStateOf<String?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val lifecycleOwner = context.findLifecycleOwner()
     val liveModels = remember(availableModels) {
@@ -810,32 +811,38 @@ internal fun VoiceScreen(
     }
 
     DisposableEffect(isLiveActive, apiKey, liveModels) {
+        val sessionId = UUID.randomUUID().toString()
         val session = if (isLiveActive && !apiKey.isNullOrBlank()) {
             GeminiLiveSession(
                 context = context,
                 apiKey = apiKey,
                 availableModels = liveModels,
                 preferences = preferences,
+                sessionId = sessionId,
                 onState = { state, detail ->
-                    liveState = state
-                    liveDetail = detail
-                    if (state == GeminiLiveState.Error || state == GeminiLiveState.Closed) {
-                        isLiveActive = false
-                        isCameraActive = false
+                    if (activeLiveSessionId == sessionId) {
+                        liveState = state
+                        liveDetail = detail
+                        if (state == GeminiLiveState.Error || state == GeminiLiveState.Closed) {
+                            isLiveActive = false
+                            isCameraActive = false
+                        }
                     }
                 },
                 onTranscript = { isUser, text ->
-                    latestTranscriptCallback(isUser, text)
+                    if (activeLiveSessionId == sessionId) {
+                        latestTranscriptCallback(isUser, text)
+                    }
                 },
-            ).also {
-                liveSession = it
-                it.start()
-            }
+            )
         } else {
-            liveSession = null
             null
         }
+        activeLiveSessionId = session?.sessionId
+        liveSession = session
+        session?.start()
         onDispose {
+            if (activeLiveSessionId == sessionId) activeLiveSessionId = null
             session?.close()
             if (liveSession === session) liveSession = null
         }

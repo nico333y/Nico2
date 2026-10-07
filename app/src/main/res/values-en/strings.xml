@@ -134,7 +134,7 @@
     <string name="live_text_attachments_unsupported">Attachments are not supported in text chat with the Live model. Choose a text model.</string>
     <string name="live_connection_timeout">Could not connect to model %1$s within 25 seconds. Check your internet connection.</string>
     <string name="live_setup_timeout">Model %1$s setup confirmation was not received.</string>
-    <string name="live_setup_no_response">The WebSocket opened for model %1$s, but no setup message arrived from Gemini within 15 seconds; the microphone has not started. WebSocket outgoing queue: %2$d bytes. This alone cannot tell whether Gemini stopped responding or the network/VPN path blocked the response. Try another VPN or network.</string>
+    <string name="live_setup_no_response">The WebSocket opened for model %1$s and the local socket accepted the setup send, but no setup response arrived within 15 seconds; the microphone has not started. WebSocket outgoing queue: %2$d bytes. This does not identify the cause. Send the session ID and sanitized events for diagnosis.</string>
     <string name="live_setup_unconfirmed_response">Model %1$s sent %2$d WebSocket message(s), but none contained setupComplete. Received fields: %3$s</string>
     <string name="voice_live_unavailable">Gemini Live model or connection is unavailable.</string>
     <string name="live_error_category_network">Network or internet</string>
@@ -143,12 +143,13 @@
     <string name="live_error_category_model">Model or model access</string>
     <string name="live_error_category_api_request">API request or configuration</string>
     <string name="live_error_category_server">Gemini server or service response</string>
-    <string name="live_error_category_no_response">No response; network/VPN or Gemini service</string>
+    <string name="live_error_category_no_response">No setup response; cause not yet identified</string>
     <string name="live_error_category_device">Device permission or hardware</string>
     <string name="live_error_category_audio">Device microphone or audio</string>
     <string name="live_error_category_protocol">Protocol or message format</string>
     <string name="live_error_category_unknown">Unknown</string>
     <string name="live_error_stage_connection">Opening WebSocket connection</string>
+    <string name="live_error_stage_setup_send">Sending WebSocket setup</string>
     <string name="live_error_stage_setup">Live model setup and confirmation</string>
     <string name="live_error_stage_audio">Initializing device audio input/output</string>
     <string name="live_error_stage_audio_stream">Sending or receiving audio stream</string>
@@ -158,6 +159,7 @@
     <string name="live_error_model_unknown">Unknown</string>
     <string name="live_error_diagnosis_label">Diagnosis</string>
     <string name="live_error_code_label">Error code</string>
+    <string name="live_error_session_label">Session ID</string>
     <string name="live_error_stage_label">Stage</string>
     <string name="live_error_model_label">Model</string>
     <string name="live_error_http_label">HTTP status</string>

@@ -134,7 +134,7 @@
     <string name="live_text_attachments_unsupported">پیوست‌ها در گفتگوی متنی با مدل Live پشتیبانی نمی‌شوند؛ یک مدل متنی انتخاب کنید.</string>
     <string name="live_connection_timeout">اتصال به مدل %1$s در ۲۵ ثانیه برقرار نشد. اینترنت و دسترسی شبکه را بررسی کن.</string>
     <string name="live_setup_timeout">تأیید پیکربندی مدل %1$s دریافت نشد.</string>
-    <string name="live_setup_no_response">اتصال WebSocket با مدل %1$s باز شد، اما تا ۱۵ ثانیه هیچ پیام setup از Gemini دریافت نشد؛ میکروفون هنوز شروع نشده است. صف خروجی WebSocket: %2$d بایت. این نتیجه به‌تنهایی مشخص نمی‌کند پاسخ در سرویس Gemini متوقف شده یا مسیر شبکه/VPN آن را عبور نداده است. VPN یا شبکهٔ دیگری را امتحان کنید.</string>
+    <string name="live_setup_no_response">اتصال WebSocket با مدل %1$s باز شد و ارسال setup در صف محلی پذیرفته شد، اما تا ۱۵ ثانیه هیچ پاسخ setup دریافت نشد؛ میکروفون شروع نشده است. صف خروجی WebSocket: %2$d بایت. این نشانه به‌تنهایی علت را مشخص نمی‌کند. شناسهٔ نشست و رویدادهای امن را برای بررسی بفرستید.</string>
     <string name="live_setup_unconfirmed_response">مدل %1$s در %2$d ثانیه پیام WebSocket فرستاد، اما setupComplete نداشت. فیلدهای دریافتی: %3$s</string>
     <string name="voice_live_unavailable">مدل یا اتصال Gemini Live در دسترس نیست.</string>
     <string name="live_error_category_network">شبکه یا اینترنت</string>
@@ -143,12 +143,13 @@
     <string name="live_error_category_model">مدل یا دسترسی به مدل</string>
     <string name="live_error_category_api_request">درخواست یا تنظیمات API</string>
     <string name="live_error_category_server">سرور Gemini یا پاسخ‌دهی سرویس</string>
-    <string name="live_error_category_no_response">پاسخ نرسید؛ شبکه/VPN یا سرویس Gemini</string>
+    <string name="live_error_category_no_response">پاسخ setup دریافت نشد؛ علت هنوز مشخص نیست</string>
     <string name="live_error_category_device">مجوز یا سخت‌افزار دستگاه</string>
     <string name="live_error_category_audio">میکروفون یا صدای دستگاه</string>
     <string name="live_error_category_protocol">پروتکل یا قالب پیام</string>
     <string name="live_error_category_unknown">نامشخص</string>
     <string name="live_error_stage_connection">برقراری اتصال WebSocket</string>
+    <string name="live_error_stage_setup_send">ارسال پیکربندی WebSocket</string>
     <string name="live_error_stage_setup">پیکربندی و تأیید مدل Live</string>
     <string name="live_error_stage_audio">راه‌اندازی ورودی/خروجی صوتی</string>
     <string name="live_error_stage_audio_stream">ارسال یا دریافت جریان صوتی</string>
@@ -158,6 +159,7 @@
     <string name="live_error_model_unknown">نامشخص</string>
     <string name="live_error_diagnosis_label">تشخیص</string>
     <string name="live_error_code_label">کد خطا</string>
+    <string name="live_error_session_label">شناسهٔ نشست</string>
     <string name="live_error_stage_label">مرحله</string>
     <string name="live_error_model_label">مدل</string>
     <string name="live_error_http_label">کد HTTP</string>

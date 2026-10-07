@@ -1,5 +1,6 @@
 package com.nico2.app
 
+import com.google.gson.JsonParser
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -103,6 +104,151 @@ class GeminiApiTest {
                 httpStatus = null,
             ),
         )
+    }
+
+    @Test
+    fun liveServerParserRecognizesSetupComplete() {
+        assertEquals(
+            LiveServerFrame.SetupComplete(listOf("setupComplete")),
+            parseLiveServerFrame("""{"setupComplete":{}}"""),
+        )
+    }
+
+    @Test
+    fun liveServerParserAcceptsBinaryUtf8JsonSetupComplete() {
+        val frame = """{"setupComplete":{}}""".toByteArray(Charsets.UTF_8)
+
+        assertEquals(
+            LiveServerFrame.SetupComplete(listOf("setupComplete")),
+            parseLiveServerFrame(frame),
+        )
+    }
+
+    @Test
+    fun liveServerParserRejectsInvalidUtf8BinaryFrame() {
+        assertEquals(
+            LiveServerFrame.Invalid("InvalidUtf8"),
+            parseLiveServerFrame(byteArrayOf(0xC3.toByte(), 0x28)),
+        )
+    }
+
+    @Test
+    fun liveServerParserPreservesServerErrorCodeAndStatus() {
+        val frame = parseLiveServerFrame(
+            """{"setupError":{"code":403,"status":"PERMISSION_DENIED","message":"denied"}}""",
+        )
+
+        assertTrue(frame is LiveServerFrame.Error)
+        val payload = (frame as LiveServerFrame.Error).payload.asJsonObject
+        assertEquals(403, payload.get("code").asInt)
+        assertEquals("PERMISSION_DENIED", payload.get("status").asString)
+    }
+
+    @Test
+    fun liveServerParserRejectsMalformedAndNonObjectFrames() {
+        assertTrue(parseLiveServerFrame("{bad") is LiveServerFrame.Invalid)
+        assertTrue(parseLiveServerFrame("""["not","an","object"]""") is LiveServerFrame.Invalid)
+        assertTrue(
+            parseLiveServerFrame("""{"setupComplete":false}""") is LiveServerFrame.Invalid,
+        )
+    }
+
+    @Test
+    fun liveServerParserExposesUnknownFramesForExplicitHandling() {
+        val frame = parseLiveServerFrame("""{"unexpectedAck":{}}""")
+
+        assertTrue(frame is LiveServerFrame.Message)
+        assertEquals(listOf("unexpectedAck"), (frame as LiveServerFrame.Message).fields)
+    }
+
+    @Test
+    fun liveHandshakeRequiresAcceptedSetupSendBeforeSetupConfirmation() {
+        val handshake = LiveHandshakeTracker()
+
+        assertTrue(handshake.onSocketOpen())
+        assertTrue(handshake.onSetupSendResult(accepted = true))
+        assertEquals(LiveHandshakePhase.SetupSent, handshake.phase)
+        assertEquals(
+            LiveHandshakePhase.SetupConfirmed,
+            handshake.onServerFrame(LiveServerFrame.SetupComplete(listOf("setupComplete"))),
+        )
+    }
+
+    @Test
+    fun liveHandshakeSendRejectionAndServerErrorsFailImmediately() {
+        val rejected = LiveHandshakeTracker()
+        rejected.onSocketOpen()
+        assertFalse(rejected.onSetupSendResult(accepted = false))
+        assertEquals(LiveHandshakePhase.Failed, rejected.phase)
+
+        val serverError = LiveHandshakeTracker()
+        serverError.onSocketOpen()
+        serverError.onSetupSendResult(accepted = true)
+        assertEquals(
+            LiveHandshakePhase.Failed,
+            serverError.onServerFrame(
+                LiveServerFrame.Error(
+                    JsonParser.parseString("""{"code":403,"status":"PERMISSION_DENIED"}"""),
+                    listOf("error"),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun liveHandshakeInvalidAndUnexpectedPreSetupFramesFailImmediately() {
+        val malformed = LiveHandshakeTracker()
+        malformed.onSocketOpen()
+        malformed.onSetupSendResult(accepted = true)
+        assertEquals(
+            LiveHandshakePhase.Failed,
+            malformed.onServerFrame(LiveServerFrame.Invalid("bad JSON")),
+        )
+
+        val unexpected = LiveHandshakeTracker()
+        unexpected.onSocketOpen()
+        unexpected.onSetupSendResult(accepted = true)
+        assertEquals(
+            LiveHandshakePhase.Failed,
+            unexpected.onServerFrame(
+                LiveServerFrame.Message(
+                    JsonParser.parseString("""{"ack":{}}""").asJsonObject,
+                    listOf("ack"),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun liveHandshakeTimeoutIsIgnoredAfterSetupAndBeforeExpectedPhase() {
+        val handshake = LiveHandshakeTracker()
+        assertFalse(handshake.onTimeout(LiveHandshakePhase.SetupSent))
+        handshake.onSocketOpen()
+        handshake.onSetupSendResult(accepted = true)
+        assertTrue(handshake.onTimeout(LiveHandshakePhase.SetupSent))
+        assertEquals(LiveHandshakePhase.Failed, handshake.phase)
+
+        val confirmed = LiveHandshakeTracker()
+        confirmed.onSocketOpen()
+        confirmed.onSetupSendResult(accepted = true)
+        confirmed.onServerFrame(LiveServerFrame.SetupComplete(listOf("setupComplete")))
+        assertFalse(confirmed.onTimeout(LiveHandshakePhase.SetupSent))
+        assertEquals(LiveHandshakePhase.SetupConfirmed, confirmed.phase)
+    }
+
+    @Test
+    fun liveHandshakeEarlyCloseIsDistinctFromSuccessfulSetupClose() {
+        val early = LiveHandshakeTracker()
+        early.onSocketOpen()
+        early.onSetupSendResult(accepted = true)
+        assertTrue(early.onClosedBeforeSetup())
+        assertEquals(LiveHandshakePhase.Closed, early.phase)
+
+        val active = LiveHandshakeTracker()
+        active.onSocketOpen()
+        active.onSetupSendResult(accepted = true)
+        active.onServerFrame(LiveServerFrame.SetupComplete(listOf("setupComplete")))
+        assertFalse(active.onClosedBeforeSetup())
     }
 
     @Test

@@ -12,7 +12,9 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
+import android.util.Log
 import com.google.gson.JsonArray
+import com.google.gson.JsonElement
 import com.google.gson.JsonParseException
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
@@ -24,8 +26,13 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString
 import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
 import java.net.URLEncoder
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
@@ -53,6 +60,7 @@ internal enum class LiveFailureCategory {
 
 internal enum class LiveFailureStage {
     Connection,
+    SetupSend,
     Setup,
     Audio,
     AudioStream,
@@ -87,6 +95,7 @@ internal fun classifyLiveFailure(
     }
     return when (stage) {
         LiveFailureStage.Connection -> LiveFailureCategory.Network
+        LiveFailureStage.SetupSend -> LiveFailureCategory.Protocol
         LiveFailureStage.Setup -> LiveFailureCategory.NoResponse
         LiveFailureStage.Session -> LiveFailureCategory.Server
         LiveFailureStage.Audio, LiveFailureStage.AudioStream -> LiveFailureCategory.Audio
@@ -104,6 +113,7 @@ internal fun liveFailureDiagnosticCode(
     return when {
         category == LiveFailureCategory.NoResponse &&
             stage == LiveFailureStage.Setup -> "LIVE_SETUP_NO_RESPONSE"
+        stage == LiveFailureStage.SetupSend -> "LIVE_SETUP_SEND_FAILED"
         category == LiveFailureCategory.NoResponse -> "LIVE_NO_RESPONSE"
         category == LiveFailureCategory.Network -> "LIVE_NETWORK_CONNECTION"
         category == LiveFailureCategory.ApiKey -> "LIVE_API_KEY_OR_PERMISSION"
@@ -125,15 +135,18 @@ internal fun formatLiveFailureDiagnostic(
     details: String,
     httpStatus: Int? = null,
     diagnosticCode: String = "LIVE_UNKNOWN_ERROR",
+    sessionId: String? = null,
     diagnosisLabel: String = "تشخیص",
     stageLabel: String = "مرحله",
     modelLabel: String = "مدل",
     httpLabel: String = "HTTP",
     codeLabel: String = "کد خطا",
+    sessionLabel: String = "شناسهٔ نشست",
     detailsLabel: String = "جزئیات",
 ): String = buildString {
-    append(codeLabel).append(": ").append(diagnosticCode)
+    append(codeLabel).append(": ").append(diagnosticCode).append("\n")
     append(diagnosisLabel).append(": ").append(category)
+    sessionId?.let { append("\n").append(sessionLabel).append(": ").append(it) }
     append("\n").append(stageLabel).append(": ").append(stage)
     append("\n").append(modelLabel).append(": ").append(modelId)
     httpStatus?.let { append("\n").append(httpLabel).append(": ").append(it) }
@@ -147,6 +160,8 @@ internal fun contextualLiveFailure(
     modelId: String?,
     details: String,
     httpStatus: Int? = null,
+    sessionId: String? = null,
+    diagnosticCode: String? = null,
 ): String {
     val categoryText = context.getString(
         when (category) {
@@ -166,6 +181,7 @@ internal fun contextualLiveFailure(
     val stageText = context.getString(
         when (stage) {
             LiveFailureStage.Connection -> R.string.live_error_stage_connection
+            LiveFailureStage.SetupSend -> R.string.live_error_stage_setup_send
             LiveFailureStage.Setup -> R.string.live_error_stage_setup
             LiveFailureStage.Audio -> R.string.live_error_stage_audio
             LiveFailureStage.AudioStream -> R.string.live_error_stage_audio_stream
@@ -180,14 +196,129 @@ internal fun contextualLiveFailure(
         modelId = modelId ?: context.getString(R.string.live_error_model_unknown),
         details = details,
         httpStatus = httpStatus,
-        diagnosticCode = liveFailureDiagnosticCode(category, stage, httpStatus),
+        diagnosticCode = diagnosticCode ?: liveFailureDiagnosticCode(category, stage, httpStatus),
+        sessionId = sessionId,
         diagnosisLabel = context.getString(R.string.live_error_diagnosis_label),
         stageLabel = context.getString(R.string.live_error_stage_label),
         modelLabel = context.getString(R.string.live_error_model_label),
         httpLabel = context.getString(R.string.live_error_http_label),
         codeLabel = context.getString(R.string.live_error_code_label),
+        sessionLabel = context.getString(R.string.live_error_session_label),
         detailsLabel = context.getString(R.string.live_error_details_label),
     )
+}
+
+internal sealed interface LiveServerFrame {
+    data class SetupComplete(val fields: List<String>) : LiveServerFrame
+    data class Error(val payload: JsonElement, val fields: List<String>) : LiveServerFrame
+    data class Message(val payload: JsonObject, val fields: List<String>) : LiveServerFrame
+    data class Invalid(val reason: String, val fields: List<String> = emptyList()) : LiveServerFrame
+}
+
+internal fun parseLiveServerFrame(text: String): LiveServerFrame {
+    val parsed = try {
+        JsonParser.parseString(text)
+    } catch (error: JsonParseException) {
+        return LiveServerFrame.Invalid(error.javaClass.simpleName)
+    }
+    if (!parsed.isJsonObject) return LiveServerFrame.Invalid("ExpectedJsonObject")
+
+    val message = parsed.asJsonObject
+    val fields = message.keySet().sorted().take(8)
+    val serverError = message.get("setupError")
+        ?.takeUnless { it.isJsonNull }
+        ?: message.get("error")?.takeUnless { it.isJsonNull }
+    if (serverError != null) return LiveServerFrame.Error(serverError, fields)
+
+    if (message.has("setupComplete")) {
+        val setupComplete = message.get("setupComplete")
+        return if (setupComplete.isJsonObject) {
+            LiveServerFrame.SetupComplete(fields)
+        } else {
+            LiveServerFrame.Invalid("InvalidSetupComplete", fields)
+        }
+    }
+    return LiveServerFrame.Message(message, fields)
+}
+
+internal fun parseLiveServerFrame(bytes: ByteArray): LiveServerFrame {
+    val text = try {
+        Charsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(bytes))
+            .toString()
+    } catch (_: CharacterCodingException) {
+        return LiveServerFrame.Invalid("InvalidUtf8")
+    }
+    return parseLiveServerFrame(text)
+}
+
+internal enum class LiveHandshakePhase {
+    Connecting,
+    SocketOpen,
+    SetupSent,
+    SetupConfirmed,
+    Failed,
+    Closed,
+}
+
+internal class LiveHandshakeTracker {
+    @Volatile
+    var phase: LiveHandshakePhase = LiveHandshakePhase.Connecting
+        private set
+
+    @Synchronized
+    fun onSocketOpen(): Boolean {
+        if (phase != LiveHandshakePhase.Connecting) return false
+        phase = LiveHandshakePhase.SocketOpen
+        return true
+    }
+
+    @Synchronized
+    fun onSetupSendResult(accepted: Boolean): Boolean {
+        if (phase != LiveHandshakePhase.SocketOpen) return false
+        phase = if (accepted) LiveHandshakePhase.SetupSent else LiveHandshakePhase.Failed
+        return accepted
+    }
+
+    @Synchronized
+    fun onServerFrame(frame: LiveServerFrame): LiveHandshakePhase {
+        if (phase == LiveHandshakePhase.Failed || phase == LiveHandshakePhase.Closed) return phase
+        phase = when (frame) {
+            is LiveServerFrame.SetupComplete ->
+                if (phase == LiveHandshakePhase.SetupConfirmed) {
+                    phase
+                } else if (phase == LiveHandshakePhase.SetupSent) {
+                    LiveHandshakePhase.SetupConfirmed
+                } else {
+                    LiveHandshakePhase.Failed
+                }
+            is LiveServerFrame.Error, is LiveServerFrame.Invalid -> LiveHandshakePhase.Failed
+            is LiveServerFrame.Message ->
+                if (phase == LiveHandshakePhase.SetupSent) LiveHandshakePhase.Failed else phase
+        }
+        return phase
+    }
+
+    @Synchronized
+    fun onTimeout(expectedPhase: LiveHandshakePhase): Boolean {
+        if (phase != expectedPhase) return false
+        phase = LiveHandshakePhase.Failed
+        return true
+    }
+
+    @Synchronized
+    fun onFailure() {
+        if (phase != LiveHandshakePhase.Closed) phase = LiveHandshakePhase.Failed
+    }
+
+    @Synchronized
+    fun onClosedBeforeSetup(): Boolean {
+        val beforeSetup = phase != LiveHandshakePhase.SetupConfirmed
+        phase = LiveHandshakePhase.Closed
+        return beforeSetup
+    }
 }
 
 private val NETWORK_ERROR_TYPES = setOf(
@@ -436,6 +567,7 @@ class GeminiLiveSession(
     private val apiKey: String,
     availableModels: List<GeminiModel>,
     private val preferences: UserPreferences,
+    internal val sessionId: String = UUID.randomUUID().toString(),
     private val onState: (GeminiLiveState, String?) -> Unit,
     private val onTranscript: (isUser: Boolean, text: String) -> Unit,
 ) {
@@ -450,6 +582,7 @@ class GeminiLiveSession(
     private val isClosed = AtomicBoolean(false)
     private val hasFailed = AtomicBoolean(false)
     private val isRecording = AtomicBoolean(false)
+    private val handshake = LiveHandshakeTracker()
     private val inputMuted = AtomicBoolean(false)
     private val inputTranscript = StringBuilder()
     private val outputTranscript = StringBuilder()
@@ -465,13 +598,20 @@ class GeminiLiveSession(
     @Volatile private var stageTimeout: Runnable? = null
     @Volatile private var setupConfirmed = false
     @Volatile private var setupSent = false
+    @Volatile private var setupSendAccepted = false
     @Volatile private var setupResponseCount = 0
     @Volatile private var lastSetupResponseFields = ""
+    @Volatile private var lastSuccessfulStage = "SESSION_CREATED"
 
     fun start() {
         if (!hasStarted.compareAndSet(false, true)) return
+        logEvent("connect_attempt", "model=${liveModel?.id ?: "unavailable"} endpoint=$LIVE_ENDPOINT")
         if (liveModel == null) {
-            report(GeminiLiveState.Error, "برای این کلید، مدل Gemini Live در دسترس نیست.")
+            fail(
+                "برای این کلید، مدل Gemini Live در دسترس نیست.",
+                stage = LiveFailureStage.Setup,
+                diagnosticCode = "LIVE_MODEL_UNAVAILABLE",
+            )
             return
         }
         connect()
@@ -522,6 +662,8 @@ class GeminiLiveSession(
 
     fun close() {
         if (!isClosed.compareAndSet(false, true)) return
+        handshake.onClosedBeforeSetup()
+        logEvent("cleanup", "lastSuccessfulStage=$lastSuccessfulStage")
         clearStageTimeout()
         stopAudio()
         webSocket?.cancel()
@@ -550,23 +692,32 @@ class GeminiLiveSession(
         val model = liveModel ?: return
         setupConfirmed = false
         setupSent = false
+        setupSendAccepted = false
         setupResponseCount = 0
         lastSetupResponseFields = ""
+        lastSuccessfulStage = "CONNECT_ATTEMPTED"
+        logEvent("websocket_connecting", "model=${model.id} endpoint=$LIVE_ENDPOINT")
         report(GeminiLiveState.Connecting, null)
         scheduleStageTimeout(
             modelIndex = currentModelIndex,
             timeoutMillis = CONNECT_TIMEOUT_MILLIS,
             stage = LiveFailureStage.Connection,
             message = { appContext.getString(R.string.live_connection_timeout, model.id) },
+            diagnosticCode = "LIVE_CONNECTION_TIMEOUT",
         )
         val encodedKey = URLEncoder.encode(apiKey, Charsets.UTF_8.name())
         val request = Request.Builder()
             .url("$LIVE_ENDPOINT?key=$encodedKey")
             .build()
-        webSocket = client.newWebSocket(
-            request,
-            LiveSocketListener(model, currentModelIndex),
-        )
+        try {
+            webSocket = client.newWebSocket(request, LiveSocketListener(model, currentModelIndex))
+        } catch (error: IllegalArgumentException) {
+            fail(
+                "ساخت درخواست WebSocket ناموفق بود: ${error.javaClass.simpleName}",
+                stage = LiveFailureStage.Connection,
+                errorType = error.javaClass.simpleName,
+            )
+        }
     }
 
     private inner class LiveSocketListener(
@@ -575,24 +726,45 @@ class GeminiLiveSession(
     ) : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
             if (modelIndex != currentModelIndex || isClosed.get()) return
+            if (!handshake.onSocketOpen()) {
+                logEvent("ignored_duplicate_open", "model=${model.id}")
+                return
+            }
             clearStageTimeout()
+            lastSuccessfulStage = "WEBSOCKET_OPEN"
+            logEvent("websocket_open", "http=${response.code} model=${model.id}")
             report(GeminiLiveState.Configuring, null)
             if (setupSent) return
             setupSent = true
-            if (!webSocket.send(
-                    buildGeminiLiveSetup(
-                        modelId = model.id,
-                        includeInputAudioTranscription = true,
-                        includeOutputAudioTranscription = true,
-                    ).toString(),
-                )
-            ) {
+            val setup = buildGeminiLiveSetup(
+                modelId = model.id,
+                includeInputAudioTranscription = true,
+                includeOutputAudioTranscription = true,
+            ).toString()
+            logEvent("setup_send_attempt", "bytes=${setup.toByteArray().size}")
+            val sendAccepted = try {
+                webSocket.send(setup)
+            } catch (error: IllegalStateException) {
+                logEvent("setup_send_result", "accepted=false exception=IllegalStateException")
                 fail(
-                    "ارسال پیکربندی Gemini Live انجام نشد.",
-                    stage = LiveFailureStage.Protocol,
+                    "ارسال پیکربندی Gemini Live ناموفق بود: IllegalStateException",
+                    stage = LiveFailureStage.SetupSend,
+                    errorType = error.javaClass.simpleName,
+                    diagnosticCode = "LIVE_SETUP_SEND_FAILED",
                 )
                 return
             }
+            logEvent("setup_send_result", "accepted=$sendAccepted queueBytes=${webSocket.queueSize()}")
+            if (!handshake.onSetupSendResult(sendAccepted)) {
+                fail(
+                    "ارسال پیکربندی Gemini Live انجام نشد.",
+                    stage = LiveFailureStage.SetupSend,
+                    diagnosticCode = "LIVE_SETUP_SEND_FAILED",
+                )
+                return
+            }
+            setupSendAccepted = true
+            lastSuccessfulStage = "SETUP_SEND_ACCEPTED_BY_LOCAL_WEBSOCKET"
             scheduleStageTimeout(
                 modelIndex = modelIndex,
                 timeoutMillis = SETUP_TIMEOUT_MILLIS,
@@ -613,75 +785,115 @@ class GeminiLiveSession(
                         )
                     }
                 },
+                diagnosticCode = "LIVE_SETUP_NO_RESPONSE",
             )
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
             if (modelIndex != currentModelIndex || isClosed.get()) return
-            val parsed = try {
-                JsonParser.parseString(text)
-            } catch (error: JsonParseException) {
-                fail(
-                    "پاسخ JSON از Gemini Live قابل پردازش نبود (${error.javaClass.simpleName}).",
-                    stage = LiveFailureStage.Protocol,
-                )
-                return
-            }
-            if (!parsed.isJsonObject) {
-                fail(
-                    "پاسخ Gemini Live از نوع JSON object نبود.",
-                    stage = LiveFailureStage.Protocol,
-                )
-                return
-            }
-            val message = parsed.asJsonObject
+            logEvent("websocket_text_frame", "bytes=${text.toByteArray().size}")
+            handleServerFrame(parseLiveServerFrame(text))
+        }
 
-            val serverError = message.get("setupError")
-                ?.takeUnless { it.isJsonNull }
-                ?: message.get("error")?.takeUnless { it.isJsonNull }
-            if (serverError != null) {
-                val details = sanitizeLiveDiagnostic(serverError.toString(), apiKey)
-                val serverErrorObject = serverError.takeIf { it.isJsonObject }?.asJsonObject
-                val serverStatus = serverErrorObject
-                    ?.get("status")
-                    ?.takeUnless { it.isJsonNull }
-                    ?.asString
-                val serverCode = serverErrorObject
-                    ?.get("code")
-                    ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }
-                    ?.asInt
-                    ?.takeIf { it in 400..599 }
-                fail(
-                    "Gemini Live setup رد شد: $details",
-                    stage = LiveFailureStage.Setup,
-                    httpStatus = serverCode,
-                    serverStatus = serverStatus,
-                )
-                return
-            }
+        override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+            if (modelIndex != currentModelIndex || isClosed.get()) return
+            logEvent("websocket_binary_frame", "bytes=${bytes.size}")
+            handleServerFrame(parseLiveServerFrame(bytes.toByteArray()))
+        }
 
-            if (!setupConfirmed && message.get("setupComplete")?.isJsonObject == true) {
-                setupConfirmed = true
-                lastSetupResponseFields = ""
-                clearStageTimeout()
-                report(GeminiLiveState.Ready, null)
-                if (!startAudio()) return
+        private fun handleServerFrame(frame: LiveServerFrame) {
+            val phaseAfterFrame = handshake.onServerFrame(frame)
+            logEvent("handshake_frame", "type=${frame.javaClass.simpleName} phase=$phaseAfterFrame")
+            when (frame) {
+                is LiveServerFrame.SetupComplete -> {
+                    setupResponseCount += 1
+                    logEvent("setup_complete_received", "fields=${frame.fields.joinToString()}")
+                    if (hasFailed.get() || phaseAfterFrame != LiveHandshakePhase.SetupConfirmed) {
+                        if (!hasFailed.get()) {
+                            fail(
+                                "setupComplete خارج از مرحلهٔ انتظار دریافت شد.",
+                                stage = LiveFailureStage.Protocol,
+                            )
+                        }
+                        return
+                    }
+                    if (!setupConfirmed) {
+                        setupConfirmed = true
+                        lastSuccessfulStage = "SETUP_CONFIRMED"
+                        lastSetupResponseFields = ""
+                        clearStageTimeout()
+                        report(GeminiLiveState.Ready, null)
+                        if (!startAudio()) return
+                    }
+                }
+                is LiveServerFrame.Error -> {
+                    setupResponseCount += 1
+                    val details = sanitizeLiveDiagnostic(frame.payload.toString(), apiKey)
+                    val serverErrorObject = frame.payload.takeIf { it.isJsonObject }?.asJsonObject
+                    val serverStatus = serverErrorObject
+                        ?.get("status")
+                        ?.takeUnless { it.isJsonNull }
+                        ?.asString
+                    val serverCode = serverErrorObject
+                        ?.get("code")
+                        ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }
+                        ?.asInt
+                        ?.takeIf { it in 400..599 }
+                    logEvent(
+                        "server_error_frame",
+                        "fields=${frame.fields.joinToString()} status=${serverStatus ?: "none"} " +
+                            "code=${serverCode ?: "none"} " +
+                            "details=${sanitizeLiveDiagnostic(frame.payload.toString(), apiKey)}",
+                    )
+                    fail(
+                        "Gemini Live setup رد شد: $details",
+                        stage = if (setupConfirmed) LiveFailureStage.Session else LiveFailureStage.Setup,
+                        httpStatus = serverCode,
+                        serverStatus = serverStatus,
+                    )
+                    return
+                }
+                is LiveServerFrame.Invalid -> {
+                    setupResponseCount += 1
+                    lastSetupResponseFields = frame.fields.joinToString()
+                    logEvent(
+                        "invalid_server_frame",
+                        "reason=${frame.reason} fields=${frame.fields.joinToString()}",
+                    )
+                    fail(
+                        "پاسخ WebSocket از Gemini Live معتبر نبود (${frame.reason}); " +
+                            "fields=${frame.fields.joinToString()}",
+                        stage = LiveFailureStage.Protocol,
+                    )
+                    return
+                }
+                is LiveServerFrame.Message -> {
+                    setupResponseCount += 1
+                    logEvent("websocket_json_frame", "fields=${frame.fields.joinToString()}")
+                    if (!setupConfirmed) {
+                        lastSetupResponseFields = frame.fields.joinToString()
+                        fail(
+                            "سرور پیش از setupComplete پیام با فیلدهای " +
+                                frame.fields.joinToString() + " فرستاد.",
+                            stage = LiveFailureStage.Protocol,
+                        )
+                        return
+                    }
+                    frame.payload.get("serverContent")
+                        ?.takeIf { it.isJsonObject }
+                        ?.asJsonObject
+                        ?.let(::handleServerContent)
+                }
             }
-            if (!setupConfirmed) {
-                setupResponseCount += 1
-                lastSetupResponseFields = message.keySet()
-                    .take(8)
-                    .joinToString()
-                    .take(MAX_DIAGNOSTIC_LENGTH)
-                return
-            }
-            message.get("serverContent")
-                ?.takeIf { it.isJsonObject }
-                ?.asJsonObject
-                ?.let(::handleServerContent)
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            handshake.onFailure()
+            logEvent(
+                "websocket_failure",
+                "type=${t.javaClass.simpleName} http=${response?.code ?: "none"} " +
+                    "ignored=${isClosed.get() || hasFailed.get()}",
+            )
             if (isClosed.get() || hasFailed.get() || modelIndex != currentModelIndex) return
             clearStageTimeout()
             stopAudio()
@@ -689,16 +901,40 @@ class GeminiLiveSession(
                 formatHandshakeFailure(model, t, response),
                 stage = if (setupConfirmed) {
                     LiveFailureStage.Session
+                } else if (setupSendAccepted) {
+                    LiveFailureStage.Setup
                 } else {
                     LiveFailureStage.Connection
                 },
                 httpStatus = response?.code,
                 errorType = t.javaClass.simpleName,
+                diagnosticCode = if (setupSendAccepted && !setupConfirmed) {
+                    "LIVE_CONNECTION_FAILED_AFTER_SETUP_SEND"
+                } else {
+                    null
+                },
+            )
+        }
+
+        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+            if (modelIndex != currentModelIndex) return
+            logEvent(
+                "websocket_closing",
+                "code=$code reason=${sanitizeLiveDiagnostic(reason, apiKey)} " +
+                    "ignored=${isClosed.get() || hasFailed.get()}",
             )
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-            if (!isClosed.get() && !hasFailed.get() && modelIndex == currentModelIndex) {
+            if (modelIndex != currentModelIndex) return
+            val closedBeforeSetup = handshake.onClosedBeforeSetup()
+            logEvent(
+                "websocket_closed",
+                "code=$code reason=${sanitizeLiveDiagnostic(reason, apiKey)} " +
+                    "setupConfirmed=$setupConfirmed " +
+                    "ignored=${isClosed.get() || hasFailed.get()}",
+            )
+            if (!isClosed.get() && !hasFailed.get()) {
                 clearStageTimeout()
                 stopAudio()
                 val safeReason = sanitizeLiveDiagnostic(reason, apiKey)
@@ -711,6 +947,11 @@ class GeminiLiveSession(
                     } else {
                         LiveFailureStage.Setup
                     },
+                    diagnosticCode = if (!closedBeforeSetup) {
+                        null
+                    } else {
+                        "LIVE_CONNECTION_CLOSED_BEFORE_SETUP"
+                    },
                 )
             }
         }
@@ -721,13 +962,22 @@ class GeminiLiveSession(
         timeoutMillis: Long,
         stage: LiveFailureStage,
         message: () -> String,
+        diagnosticCode: String? = null,
     ) {
         clearStageTimeout()
         val timeout = Runnable {
+            val expectedHandshakePhase = when (stage) {
+                LiveFailureStage.Connection -> LiveHandshakePhase.Connecting
+                LiveFailureStage.Setup -> LiveHandshakePhase.SetupSent
+                else -> null
+            }
+            val handshakeTimedOut = expectedHandshakePhase?.let(handshake::onTimeout) ?: true
             if (!isClosed.get() && !hasFailed.get() &&
-                currentModelIndex == modelIndex && !isRecording.get()
+                currentModelIndex == modelIndex && !isRecording.get() &&
+                handshakeTimedOut
             ) {
-                fail(message(), stage = stage)
+                logEvent("timeout", "stage=$stage")
+                fail(message(), stage = stage, diagnosticCode = diagnosticCode)
             }
         }
         stageTimeout = timeout
@@ -822,9 +1072,10 @@ class GeminiLiveSession(
     }
 
     private fun startAudio(): Boolean {
-        if (isClosed.get()) return false
+        if (isClosed.get() || hasFailed.get() || !setupConfirmed) return false
         if (!isRecording.compareAndSet(false, true)) return true
         try {
+            logEvent("microphone_starting")
             previousAudioMode = audioManager.mode
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 previousCommunicationDevice = audioManager.communicationDevice
@@ -881,6 +1132,8 @@ class GeminiLiveSession(
 
             recorder.startRecording()
             audioTrack?.play()
+            lastSuccessfulStage = "MICROPHONE_STARTED"
+            logEvent("microphone_started", "inputRate=$INPUT_SAMPLE_RATE outputRate=$OUTPUT_SAMPLE_RATE")
             report(GeminiLiveState.Listening, null)
             thread(name = "gemini-live-audio-input") {
                 val samples = ShortArray(INPUT_CHUNK_SAMPLES)
@@ -967,8 +1220,15 @@ class GeminiLiveSession(
         httpStatus: Int? = null,
         errorType: String? = null,
         serverStatus: String? = null,
+        diagnosticCode: String? = null,
     ) {
         if (!hasFailed.compareAndSet(false, true)) return
+        handshake.onFailure()
+        logEvent(
+            "session_failure",
+            "stage=$stage http=${httpStatus ?: "none"} errorType=${errorType ?: "none"} " +
+                "lastSuccessfulStage=$lastSuccessfulStage",
+        )
         clearStageTimeout()
         stopAudio()
         restoreAudioRouting()
@@ -981,9 +1241,20 @@ class GeminiLiveSession(
                 category = category,
                 stage = stage,
                 modelId = liveModel?.id,
-                details = sanitizeLiveDiagnostic(message, apiKey),
+                details = "lastSuccessfulStage=$lastSuccessfulStage; " +
+                    sanitizeLiveDiagnostic(message, apiKey),
                 httpStatus = httpStatus,
+                sessionId = sessionId,
+                diagnosticCode = diagnosticCode
+                    ?: liveFailureDiagnosticCode(category, stage, httpStatus),
             ),
+        )
+    }
+
+    private fun logEvent(event: String, details: String = "") {
+        Log.i(
+            LIVE_LOG_TAG,
+            "time=${System.currentTimeMillis()} session=$sessionId event=$event $details",
         )
     }
 
@@ -1013,6 +1284,7 @@ class GeminiLiveSession(
         private const val INPUT_BUFFER_BYTES = 8_192
         private const val OUTPUT_BUFFER_BYTES = 16_384
         private const val MAX_VIDEO_FRAME_BYTES = 4 * 1024 * 1024
+        private const val LIVE_LOG_TAG = "Nico2Live"
 
         fun liveFallbackOrder(models: List<GeminiModel>): List<GeminiModel> {
             val eligible = models.filter { it.supportsLive }
