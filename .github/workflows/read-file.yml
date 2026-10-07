@@ -22,7 +22,7 @@ jobs:
           FILE_PATH="${COMMENT#/read }"
           FILE_PATH="$(echo "$FILE_PATH" | xargs)"
           case "$FILE_PATH" in
-            README.md|AGENTS.md|PERPLEXITY_MCP_SETUP.md|app/*|gradle/*|*.gradle|*.gradle.kts|*.properties) ;;
+            README.md|AGENTS.md|PERPLEXITY_MCP_SETUP.md|app/*|gradle/*|docs/*|*.gradle|*.gradle.kts|*.properties) ;;
             *) echo "Path not allowed: $FILE_PATH" >&2; exit 1 ;;
           esac
           [ -f "$FILE_PATH" ] || { echo "File not found: $FILE_PATH" >&2; exit 1; }
